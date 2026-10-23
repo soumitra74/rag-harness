@@ -1,8 +1,11 @@
 import asyncio
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from app.services.codegen import CODEGEN_AXES, reset_graph_labels
 from app.services.judge import get_completion_provider
 from app.services.sweep import (
     apply_user_suggestion,
@@ -24,10 +27,18 @@ class BudgetInput(BaseModel):
     iterations: float
 
 
+class CodegenInput(BaseModel):
+    cost_usd: float
+    minutes: float
+    attempts: int
+    tasks: list[Literal["ocr", "graph_labels"]] = ["ocr", "graph_labels"]
+
+
 class StartSweepRequest(BaseModel):
     ingestion_budget: BudgetInput
     eval_budget: BudgetInput
     generate_golden_qa: bool = False
+    codegen: CodegenInput | None = None
 
 
 class SuggestRequest(BaseModel):
@@ -36,8 +47,8 @@ class SuggestRequest(BaseModel):
     accept: bool = False
 
 
-def _validate_budget(budget: BudgetInput, label: str) -> None:
-    for axis in BUDGET_AXES:
+def _validate_budget(budget, label: str, axes: tuple[str, ...] = BUDGET_AXES) -> None:
+    for axis in axes:
         if getattr(budget, axis) <= 0:
             raise HTTPException(
                 status_code=400,
@@ -76,6 +87,7 @@ def _sweep_to_dict(sweep: dict) -> dict:
         "best_score": sweep["best_score"],
         "summary_markdown": sweep["summary_markdown"],
         "error_message": sweep["error_message"],
+        "codegen_budget": sweep.get("codegen_budget"),
         "created_at": sweep["created_at"].isoformat(),
         "completed_at": sweep["completed_at"].isoformat() if sweep["completed_at"] else None,
     }
@@ -85,6 +97,10 @@ def _sweep_to_dict(sweep: dict) -> dict:
 async def start_sweep(request: Request, body: StartSweepRequest):
     _validate_budget(body.ingestion_budget, "ingestion_budget")
     _validate_budget(body.eval_budget, "eval_budget")
+    codegen_budget = None
+    if body.codegen is not None:
+        _validate_budget(body.codegen, "codegen", CODEGEN_AXES)
+        codegen_budget = {axis: getattr(body.codegen, axis) for axis in CODEGEN_AXES}
 
     if request.app.state.sweep_in_progress:
         raise HTTPException(status_code=409, detail="A sweep is already in progress")
@@ -92,8 +108,11 @@ async def start_sweep(request: Request, body: StartSweepRequest):
 
     db = request.app.state.db
     settings = request.app.state.settings
-    sweep_id = await db.create_sweep(body.ingestion_budget.model_dump(),
-                                      body.eval_budget.model_dump())
+    reset_graph_labels(request.app.state.ner)
+    sweep_id = await db.create_sweep(
+        body.ingestion_budget.model_dump(), body.eval_budget.model_dump(),
+        codegen_budget=codegen_budget,
+    )
     provider = _get_provider(request)
 
     async def _run_and_release():
@@ -103,6 +122,8 @@ async def start_sweep(request: Request, body: StartSweepRequest):
                 run_bootstrap(
                     db, provider, request.app.state.ner, settings, sweep_id,
                     body.generate_golden_qa,
+                    codegen_tasks=body.codegen.tasks if body.codegen else None,
+                    codegen_budget=codegen_budget,
                 ),
             )
         finally:
@@ -124,6 +145,8 @@ async def get_sweep(request: Request, sweep_id: int):
     result = _sweep_to_dict(sweep)
     result["ingestion_spent"] = await db.sum_ingestion_spend(sweep_id)
     result["eval_spent"] = await db.sum_eval_spend(sweep_id)
+    result["codegen_spent"] = await db.sum_codegen_spend(sweep_id)
+    result["generated_tasks"] = sorted(await db.get_generated_artifacts(sweep_id))
     result["sweep_configs"] = [
         {
             "id": sc["id"], "config_id": sc["config_id"], "rationale": sc["rationale"],

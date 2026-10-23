@@ -477,6 +477,33 @@ class Database:
             await conn.execute(
                 "ALTER TABLE ingestion_runs ADD COLUMN IF NOT EXISTS cost_usd FLOAT"
             )
+            await conn.execute("ALTER TABLE sweeps ADD COLUMN IF NOT EXISTS codegen_budget JSONB")
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS codegen_runs (
+                    id           SERIAL PRIMARY KEY,
+                    sweep_id     INT NOT NULL REFERENCES sweeps(id),
+                    task         TEXT NOT NULL,
+                    attempt      INT NOT NULL,
+                    passed       BOOLEAN NOT NULL,
+                    error        TEXT,
+                    cost_usd     FLOAT NOT NULL DEFAULT 0,
+                    duration_ms  INT NOT NULL DEFAULT 0,
+                    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS generated_artifacts (
+                    sweep_id     INT NOT NULL REFERENCES sweeps(id),
+                    task         TEXT NOT NULL,
+                    content      TEXT NOT NULL,
+                    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (sweep_id, task)
+                )
+                """
+            )
 
             # rca_readonly backs run_readonly_sql (the LLM-authored-SQL escape
             # hatch) -- SELECT-only grants, so even a bypassed app-level check
@@ -720,13 +747,63 @@ class Database:
                 for row in rows
             ]
 
-    async def create_sweep(self, ingestion_budget: dict, eval_budget: dict) -> int:
+    async def create_sweep(
+        self, ingestion_budget: dict, eval_budget: dict, codegen_budget: dict | None = None,
+    ) -> int:
         async with self.pool.acquire() as conn:
             return await conn.fetchval(
-                "INSERT INTO sweeps (ingestion_budget, eval_budget) "
-                "VALUES ($1::jsonb, $2::jsonb) RETURNING id",
+                "INSERT INTO sweeps (ingestion_budget, eval_budget, codegen_budget) "
+                "VALUES ($1::jsonb, $2::jsonb, $3::jsonb) RETURNING id",
                 json.dumps(ingestion_budget), json.dumps(eval_budget),
+                json.dumps(codegen_budget) if codegen_budget is not None else None,
             )
+
+    async def insert_codegen_run(
+        self, sweep_id: int, task: str, attempt: int, passed: bool, error: str | None,
+        cost_usd: float, duration_ms: int,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO codegen_runs (sweep_id, task, attempt, passed, error, cost_usd, "
+                "duration_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                sweep_id, task, attempt, passed, error, cost_usd, duration_ms,
+            )
+
+    async def sum_codegen_spend(self, sweep_id: int) -> dict:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0) AS cost_usd,
+                       COALESCE(SUM(duration_ms), 0) / 60000.0 AS minutes,
+                       COUNT(*) AS attempts
+                FROM codegen_runs
+                WHERE sweep_id = $1
+                """,
+                sweep_id,
+            )
+            return {
+                "cost_usd": float(row["cost_usd"]), "minutes": float(row["minutes"]),
+                "attempts": row["attempts"],
+            }
+
+    async def upsert_generated_artifact(self, sweep_id: int, task: str, content: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO generated_artifacts (sweep_id, task, content)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (sweep_id, task) DO UPDATE SET content = EXCLUDED.content,
+                                                            created_at = now()
+                """,
+                sweep_id, task, content,
+            )
+
+    async def get_generated_artifacts(self, sweep_id: int) -> dict[str, str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT task, content FROM generated_artifacts WHERE sweep_id = $1", sweep_id,
+            )
+            return {row["task"]: row["content"] for row in rows}
 
     async def create_sweep_config(
         self, sweep_id: int, config_id: int, rationale: str | None, status: str, source: str,
@@ -820,6 +897,8 @@ class Database:
             sweep = dict(row)
             sweep["ingestion_budget"] = json.loads(sweep["ingestion_budget"])
             sweep["eval_budget"] = json.loads(sweep["eval_budget"])
+            if sweep.get("codegen_budget") is not None:
+                sweep["codegen_budget"] = json.loads(sweep["codegen_budget"])
             if sweep.get("corpus_snapshot") is not None:
                 sweep["corpus_snapshot"] = json.loads(sweep["corpus_snapshot"])
             return sweep

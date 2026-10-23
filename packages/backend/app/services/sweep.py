@@ -6,6 +6,13 @@ from app.providers.embedding_catalog import get_embedding_dim
 from app.providers.factory import get_embedding_provider_for_config
 from app.providers.reranker import DEFAULT_RERANK_CANDIDATES, DEFAULT_RERANK_MODEL, get_reranker
 from app.routing.from_settings import judge_identity
+from app.services.codegen import (
+    CodegenContext,
+    CodegenFailed,
+    apply_graph_labels,
+    make_ocr_page,
+    run_codegen_tasks,
+)
 from app.services.corpus_inspector import CorpusInspectionError, inspect_corpus
 from app.services.eval_run import load_golden_dataset, new_eval_job, run_eval_job
 from app.services.golden_qa_generator import GoldenQAGenerationError, generate_golden_qa
@@ -59,6 +66,11 @@ async def _ensure_golden_qa(provider, settings, generate_golden_qa_flag: bool) -
 
 async def _ingest_and_backfill_config(db, ner, settings, config, sweep_id: int | None) -> None:
     embedding_provider = get_embedding_provider_for_config(settings, config)
+    artifacts = await db.get_generated_artifacts(sweep_id) if sweep_id is not None else {}
+    apply_graph_labels(ner, artifacts.get("graph_labels"))
+    ocr_page = (
+        make_ocr_page(settings.codegen_sandbox_url, artifacts["ocr"]) if "ocr" in artifacts else None
+    )
     corpus_path = Path(settings.corpus_dir)
     start = time.monotonic()
     input_size_bytes = 0
@@ -67,7 +79,9 @@ async def _ingest_and_backfill_config(db, ner, settings, config, sweep_id: int |
         pdf_bytes = (corpus_path / filename).read_bytes()
         input_size_bytes += len(pdf_bytes)
         try:
-            result = await ingest_pdf(filename, pdf_bytes, db, embedding_provider, config)
+            result = await ingest_pdf(
+                filename, pdf_bytes, db, embedding_provider, config, ocr_page=ocr_page,
+            )
             results.append({
                 "filename": filename, "document_id": result.document_id,
                 "chunk_count": result.chunk_count, "page_count": result.page_count,
@@ -94,6 +108,7 @@ async def _create_and_ingest_candidate(db, ner, settings, candidate, sweep_id: i
 
 async def run_bootstrap(
     db, provider, ner, settings, sweep_id: int, generate_golden_qa_flag: bool,
+    codegen_tasks: list[str] | None = None, codegen_budget: dict | None = None,
 ) -> None:
     try:
         # Corpus-emptiness must be checked before golden-QA generation: with
@@ -103,6 +118,9 @@ async def run_bootstrap(
         # finding I-2). inspect_corpus itself raises on empty, so simply
         # calling it first is enough to gate both checks on the same signal.
         candidates = await inspect_corpus(provider, settings.corpus_dir)
+        if codegen_tasks:
+            ctx = CodegenContext(settings=settings, ner=ner, sandbox_url=settings.codegen_sandbox_url)
+            await run_codegen_tasks(db, provider, ctx, sweep_id, codegen_tasks, codegen_budget)
         await _ensure_golden_qa(provider, settings, generate_golden_qa_flag)
         await db.set_corpus_snapshot(sweep_id, list_pdf_filenames(settings.corpus_dir))
 
@@ -120,7 +138,7 @@ async def run_bootstrap(
             await db.create_sweep_config(sweep_id, config.id, rationale, "ingested", "bootstrap")
 
         await db.update_sweep_status(sweep_id, "awaiting_approval")
-    except (CorpusInspectionError, GoldenQAGenerationError) as exc:
+    except (CorpusInspectionError, GoldenQAGenerationError, CodegenFailed) as exc:
         await db.update_sweep_status(sweep_id, "failed", error_message=str(exc))
 
 
@@ -253,6 +271,8 @@ async def finalize_sweep_run(db, provider, settings, sweep_id: int, stop_reason:
 
 async def run_sweep_loop(db, provider, chat_provider, judge, ner, settings, sweep_id: int) -> None:
     sweep_row = await db.get_sweep(sweep_id)
+    artifacts = await db.get_generated_artifacts(sweep_id)
+    apply_graph_labels(ner, artifacts.get("graph_labels"))
 
     while True:
         pending = await db.get_next_pending_sweep_config(sweep_id)
