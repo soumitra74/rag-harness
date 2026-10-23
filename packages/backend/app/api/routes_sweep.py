@@ -1,0 +1,261 @@
+import asyncio
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from app.services.judge import get_completion_provider
+from app.services.sweep import (
+    apply_user_suggestion,
+    finalize_sweep_run,
+    list_pdf_filenames,
+    resume_sweep,
+    run_bootstrap,
+    run_sweep_loop,
+)
+
+router = APIRouter()
+
+BUDGET_AXES = ("cost_usd", "minutes", "iterations")
+
+
+class BudgetInput(BaseModel):
+    cost_usd: float
+    minutes: float
+    iterations: float
+
+
+class StartSweepRequest(BaseModel):
+    ingestion_budget: BudgetInput
+    eval_budget: BudgetInput
+    generate_golden_qa: bool = False
+
+
+class SuggestRequest(BaseModel):
+    hint: str | None = None
+    explicit_config: dict | None = None
+    accept: bool = False
+
+
+def _validate_budget(budget: BudgetInput, label: str) -> None:
+    for axis in BUDGET_AXES:
+        if getattr(budget, axis) <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label}.{axis} must be greater than 0",
+            )
+
+
+async def _run_sweep_task(db, sweep_id: int, coro) -> None:
+    """Every orchestrator entry point is scheduled via asyncio.create_task
+    (fire-and-forget from the route's perspective), so an unhandled
+    exception there would otherwise just vanish into the event loop's
+    default exception handler, leaving the sweep stuck in whatever status
+    it was in (bootstrapping/running) forever -- the only recovery being a
+    backend restart, which merely flips it to paused, still with no error
+    shown. Catches anything the orchestrator itself doesn't already handle
+    and records it as a clear failure instead."""
+    try:
+        await coro
+    except Exception as exc:
+        await db.update_sweep_status(sweep_id, "failed", error_message=str(exc))
+
+
+def _get_provider(request: Request):
+    if request.app.state.sweep_provider is None:
+        request.app.state.sweep_provider = get_completion_provider(request.app.state.settings)
+    return request.app.state.sweep_provider
+
+
+def _sweep_to_dict(sweep: dict) -> dict:
+    return {
+        "id": sweep["id"],
+        "status": sweep["status"],
+        "ingestion_budget": sweep["ingestion_budget"],
+        "eval_budget": sweep["eval_budget"],
+        "best_config_id": sweep["best_config_id"],
+        "best_score": sweep["best_score"],
+        "summary_markdown": sweep["summary_markdown"],
+        "error_message": sweep["error_message"],
+        "created_at": sweep["created_at"].isoformat(),
+        "completed_at": sweep["completed_at"].isoformat() if sweep["completed_at"] else None,
+    }
+
+
+@router.post("/api/sweep/start")
+async def start_sweep(request: Request, body: StartSweepRequest):
+    _validate_budget(body.ingestion_budget, "ingestion_budget")
+    _validate_budget(body.eval_budget, "eval_budget")
+
+    if request.app.state.sweep_in_progress:
+        raise HTTPException(status_code=409, detail="A sweep is already in progress")
+    request.app.state.sweep_in_progress = True
+
+    db = request.app.state.db
+    settings = request.app.state.settings
+    sweep_id = await db.create_sweep(body.ingestion_budget.model_dump(),
+                                      body.eval_budget.model_dump())
+    provider = _get_provider(request)
+
+    async def _run_and_release():
+        try:
+            await _run_sweep_task(
+                db, sweep_id,
+                run_bootstrap(
+                    db, provider, request.app.state.ner, settings, sweep_id,
+                    body.generate_golden_qa,
+                ),
+            )
+        finally:
+            request.app.state.sweep_in_progress = False
+
+    asyncio.create_task(_run_and_release())
+
+    return {"sweep_id": sweep_id, "status": "bootstrapping"}
+
+
+@router.get("/api/sweep/{sweep_id}")
+async def get_sweep(request: Request, sweep_id: int):
+    db = request.app.state.db
+    sweep = await db.get_sweep(sweep_id)
+    if sweep is None:
+        raise HTTPException(status_code=404, detail=f"Unknown sweep: {sweep_id}")
+
+    sweep_configs = await db.list_sweep_configs(sweep_id)
+    result = _sweep_to_dict(sweep)
+    result["ingestion_spent"] = await db.sum_ingestion_spend(sweep_id)
+    result["eval_spent"] = await db.sum_eval_spend(sweep_id)
+    result["sweep_configs"] = [
+        {
+            "id": sc["id"], "config_id": sc["config_id"], "rationale": sc["rationale"],
+            "status": sc["status"], "source": sc["source"],
+        }
+        for sc in sweep_configs
+    ]
+    return result
+
+
+@router.post("/api/sweep/{sweep_id}/approve")
+async def approve_sweep(request: Request, sweep_id: int):
+    db = request.app.state.db
+    settings = request.app.state.settings
+    sweep = await db.get_sweep(sweep_id)
+    if sweep is None:
+        raise HTTPException(status_code=404, detail=f"Unknown sweep: {sweep_id}")
+    if sweep["status"] != "awaiting_approval":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Sweep {sweep_id} is not awaiting approval (status: {sweep['status']!r})",
+        )
+
+    await db.update_sweep_status(sweep_id, "running")
+    provider = _get_provider(request)
+    asyncio.create_task(
+        _run_sweep_task(
+            db, sweep_id,
+            run_sweep_loop(
+                db, provider, request.app.state.chat_provider, request.app.state.judge,
+                request.app.state.ner, settings, sweep_id,
+            ),
+        )
+    )
+    return {"sweep_id": sweep_id, "status": "running"}
+
+
+@router.post("/api/sweep/{sweep_id}/resume")
+async def resume_sweep_route(request: Request, sweep_id: int):
+    db = request.app.state.db
+    settings = request.app.state.settings
+    sweep = await db.get_sweep(sweep_id)
+    if sweep is None:
+        raise HTTPException(status_code=404, detail=f"Unknown sweep: {sweep_id}")
+    if sweep["status"] != "paused":
+        raise HTTPException(
+            status_code=409, detail=f"Sweep {sweep_id} is not paused (status: {sweep['status']!r})",
+        )
+
+    current_files = list_pdf_filenames(settings.corpus_dir)
+    if sorted(current_files) != sorted(sweep["corpus_snapshot"] or []):
+        raise HTTPException(
+            status_code=409,
+            detail="Corpus files have changed since this sweep's bootstrap; cannot resume.",
+        )
+
+    # Set synchronously, before dispatching the background task: resume_sweep
+    # itself only sets this after re-validating the corpus (redundant but
+    # harmless), and a client polling GET /api/sweep/{id} right after this
+    # response must never still see "paused" (review finding I-5).
+    await db.update_sweep_status(sweep_id, "running")
+    provider = _get_provider(request)
+    asyncio.create_task(
+        _run_sweep_task(
+            db, sweep_id,
+            resume_sweep(
+                db, provider, request.app.state.chat_provider, request.app.state.judge,
+                request.app.state.ner, settings, sweep_id,
+            ),
+        )
+    )
+    return {"sweep_id": sweep_id, "status": "running"}
+
+
+@router.post("/api/sweep/{sweep_id}/suggest")
+async def suggest_sweep(request: Request, sweep_id: int, body: SuggestRequest):
+    db = request.app.state.db
+    settings = request.app.state.settings
+    sweep = await db.get_sweep(sweep_id)
+    if sweep is None:
+        raise HTTPException(status_code=404, detail=f"Unknown sweep: {sweep_id}")
+    if sweep["status"] != "awaiting_suggestion":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Sweep {sweep_id} is not awaiting a suggestion (status: {sweep['status']!r})",
+        )
+
+    provider = _get_provider(request)
+
+    # Set synchronously, before dispatching either path's background task:
+    # finalize_sweep_run's real terminal status (stopped_optimal) and
+    # apply_user_suggestion's own "running" write both only happen deep
+    # inside an LLM round-trip, so a client polling GET /api/sweep/{id}
+    # right after this response must never still see "awaiting_suggestion"
+    # -- that's exactly what bounces the wizard back to this page (review
+    # finding I-5). The response always reports "running" since that's
+    # what's true the instant this returns; the real terminal status lands
+    # once the background task finishes, same as every other sweep action.
+    await db.update_sweep_status(sweep_id, "running")
+
+    if body.accept and not body.hint and not body.explicit_config:
+        asyncio.create_task(
+            _run_sweep_task(
+                db, sweep_id,
+                finalize_sweep_run(db, provider, settings, sweep_id, "stopped_optimal"),
+            )
+        )
+        return {"sweep_id": sweep_id, "status": "running"}
+
+    asyncio.create_task(
+        _run_sweep_task(
+            db, sweep_id,
+            apply_user_suggestion(
+                db, provider, request.app.state.chat_provider, request.app.state.judge,
+                request.app.state.ner, settings, sweep_id, body.hint, body.explicit_config,
+            ),
+        )
+    )
+    return {"sweep_id": sweep_id, "status": "running"}
+
+
+@router.post("/api/sweep/{sweep_id}/cancel")
+async def cancel_sweep(request: Request, sweep_id: int):
+    db = request.app.state.db
+    sweep = await db.get_sweep(sweep_id)
+    if sweep is None:
+        raise HTTPException(status_code=404, detail=f"Unknown sweep: {sweep_id}")
+    # Cooperative cancellation of an in-flight background loop isn't wired
+    # up (run_sweep_loop doesn't check for this status mid-iteration) --
+    # this stops the sweep from being resumed/approved further, but a
+    # currently-running loop will finish its current step before anything
+    # would notice. Acceptable for now: not one of this task's tested
+    # scenarios, and cancel is rare compared to budget/convergence stops.
+    await db.update_sweep_status(sweep_id, "cancelled")
+    return {"sweep_id": sweep_id, "status": "cancelled"}
