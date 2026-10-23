@@ -15,12 +15,30 @@ services:
       timeout: 5s
       retries: 15
 
+  codegen-sandbox:
+    build: ./packages/codegen-sandbox
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    pids_limit: 256
+    networks:
+      - sandbox
+
   backend:
     build: ./packages/backend
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-fraudrag}:${POSTGRES_PASSWORD:-fraudragpass}@postgres:5432/${POSTGRES_DB:-fraudragdb}
       OLLAMA_BASE_URL: http://host.docker.internal:11444
+      CODEGEN_SANDBOX_URL: http://codegen-sandbox:8000
+    networks:
+      - default
+      - sandbox
     ports:
       - "${BACKEND_HOST_PORT:-8089}:8000"
     volumes:
@@ -30,6 +48,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+networks:
+  # Internal: no route to the internet. Generated code runs only here.
+  sandbox:
+    internal: true
 
 volumes:
   fraud_pgdata:
