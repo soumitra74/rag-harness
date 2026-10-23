@@ -15,6 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 \
     && apt-get purge -y curl gnupg && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+# CPU-only torch: the container has no GPU, and the default Linux wheel pulls in
+# multi-GB CUDA packages. Installed first so requirements.txt's torch dependency
+# (via sentence-transformers / gliner) is satisfied by the CPU build.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
