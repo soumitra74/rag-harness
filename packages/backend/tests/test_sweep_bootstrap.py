@@ -8,6 +8,7 @@ from app.providers.base import LLMResponse
 from app.services.corpus_inspector import CorpusConfigCandidate, CorpusInspectionError
 from app.services.golden_qa_generator import GoldenQAGenerationError
 import app.services.sweep as sweep
+from tests.codegen_fakes import CodegenFakeMethods
 
 CANDIDATES = [
     CorpusConfigCandidate(
@@ -23,7 +24,7 @@ class FakeProvider:
         return LLMResponse(text="{}", input_tokens=1, output_tokens=1)
 
 
-class FakeDatabase:
+class FakeDatabase(CodegenFakeMethods):
     def __init__(self):
         self.created_configs = []
         self.sweep_configs = []

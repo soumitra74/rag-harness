@@ -4,6 +4,7 @@ from app.config import Settings
 from app.db import ExperimentConfig
 from app.services.sweep_next_config import NextConfigResult, TriedConfig
 import app.services.sweep as sweep
+from tests.codegen_fakes import CodegenFakeMethods
 
 CONFIG_A = ExperimentConfig(
     id=1, chunking_strategy="sliding_window", chunk_size=1000, chunk_overlap=200,
@@ -17,7 +18,7 @@ CONFIG_B = ExperimentConfig(
 )
 
 
-class FakeDatabase:
+class FakeDatabase(CodegenFakeMethods):
     def __init__(self, sweep_configs, cycles):
         self._sweep_configs = sweep_configs
         self._cycles = cycles

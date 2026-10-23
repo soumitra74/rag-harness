@@ -1,20 +1,22 @@
 from datetime import datetime, timezone
 
+from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import app
 import app.api.routes_sweep as routes_sweep
+from tests.codegen_fakes import CodegenFakeMethods
 
 
-class FakeDatabase:
+class FakeDatabase(CodegenFakeMethods):
     def __init__(self):
         self._sweeps = {}
         self._sweep_configs = {}
         self._next_id = 1
 
-    async def create_sweep(self, ingestion_budget, eval_budget):
+    async def create_sweep(self, ingestion_budget, eval_budget, codegen_budget=None):
         sweep_id = self._next_id
         self._next_id += 1
         self._sweeps[sweep_id] = {
@@ -59,7 +61,7 @@ def _client(monkeypatch, db=None):
     _patch_orchestrator(monkeypatch)
     app.state.db = db or FakeDatabase()
     app.state.settings = Settings()
-    app.state.ner = object()
+    app.state.ner = SimpleNamespace(labels=[])
     app.state.chat_provider = object()
     app.state.judge = object()
     app.state.sweep_in_progress = False

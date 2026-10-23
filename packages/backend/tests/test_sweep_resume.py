@@ -2,9 +2,10 @@ import pytest
 
 from app.config import Settings
 import app.services.sweep as sweep
+from tests.codegen_fakes import CodegenFakeMethods
 
 
-class FakeDatabase:
+class FakeDatabase(CodegenFakeMethods):
     def __init__(self, corpus_snapshot):
         self._corpus_snapshot = corpus_snapshot
         self.status_updates = []

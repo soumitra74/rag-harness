@@ -5,6 +5,7 @@ from app.db import ExperimentConfig
 from app.services.corpus_inspector import CorpusConfigCandidate
 from app.services.sweep_next_config import NextConfigResult
 import app.services.sweep as sweep
+from tests.codegen_fakes import CodegenFakeMethods
 
 CONFIG = ExperimentConfig(
     id=1, chunking_strategy="sliding_window", chunk_size=1000, chunk_overlap=200,
@@ -17,7 +18,7 @@ NEW_CANDIDATE = CorpusConfigCandidate(
 )
 
 
-class FakeDatabase:
+class FakeDatabase(CodegenFakeMethods):
     def __init__(self, pending_sweep_config):
         self._pending = [pending_sweep_config] if pending_sweep_config else []
         self._next_id = 100
