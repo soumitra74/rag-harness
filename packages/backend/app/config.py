@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # a destructive reset (see app/services/reset_db.py).
     reset_backup_dir: str = "backups"
 
+    # Isolated executor for LLM-generated code (see packages/codegen-sandbox).
+    codegen_sandbox_url: str = "http://codegen-sandbox:8000"
+
     # Judge LLM for scoring eval-cycle answers. Deliberately a different
     # model than the config's own chat_provider to avoid self-preference
     # bias. docker-compose mounts eval/golden_qa.json at eval_dataset_path

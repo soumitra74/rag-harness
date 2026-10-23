@@ -24,6 +24,8 @@ class ExtractedEntity:
 class NERService:
     def __init__(self):
         self._model: GLiNER | None = None
+        # Replaced per sweep by the generated graph-label set (see codegen.py).
+        self.labels: list[str] = list(ENTITY_LABELS)
 
     def _get_model(self) -> GLiNER:
         # Lazy load, mirroring SentenceTransformersEmbeddingProvider: constructing
@@ -33,9 +35,9 @@ class NERService:
             self._model = GLiNER.from_pretrained(MODEL_NAME)
         return self._model
 
-    def _predict(self, text: str) -> list[ExtractedEntity]:
+    def _predict(self, text: str, labels: list[str]) -> list[ExtractedEntity]:
         model = self._get_model()
-        raw = model.predict_entities(text, ENTITY_LABELS, threshold=SCORE_THRESHOLD)
+        raw = model.predict_entities(text, labels, threshold=SCORE_THRESHOLD)
         return [
             ExtractedEntity(
                 entity_type=r["label"],
@@ -47,8 +49,8 @@ class NERService:
             for r in raw
         ]
 
-    async def extract(self, text: str) -> list[ExtractedEntity]:
-        return await asyncio.to_thread(self._predict, text)
+    async def extract(self, text: str, labels: list[str] | None = None) -> list[ExtractedEntity]:
+        return await asyncio.to_thread(self._predict, text, labels or self.labels)
 
     async def warm_up(self) -> None:
         """Force model load at a known point (container startup) instead of

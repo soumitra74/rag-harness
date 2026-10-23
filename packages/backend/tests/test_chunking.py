@@ -11,7 +11,7 @@ from app.services.chunking import (
     chunk_recursive_semantic,
     chunk_sentence_window,
     extract_pages,
-    _normalize_page_text,
+    normalize_page_text,
     _strip_null_bytes,
 )
 
@@ -301,16 +301,16 @@ def test_normalize_page_text_collapses_dot_leaders():
         "................................................................................ 2 \n"
         "UH-60A Airloads"
     )
-    normalized = _normalize_page_text(text)
+    normalized = normalize_page_text(text)
     assert "." * 5 not in normalized
     assert "Description of Aircraft and Rotor System" in normalized
     assert "UH-60A Airloads" in normalized
 
 
 def test_normalize_page_text_leaves_ordinary_sentences_and_ellipses_alone():
-    assert _normalize_page_text("A short sentence.") == "A short sentence."
-    assert _normalize_page_text("Wait... what happened?") == "Wait... what happened?"
-    assert _normalize_page_text("e.g. a.b.c.") == "e.g. a.b.c."
+    assert normalize_page_text("A short sentence.") == "A short sentence."
+    assert normalize_page_text("Wait... what happened?") == "Wait... what happened?"
+    assert normalize_page_text("e.g. a.b.c.") == "e.g. a.b.c."
 
 
 def test_strip_null_bytes_removes_nul_from_misdecoded_ligatures():
@@ -320,4 +320,4 @@ def test_strip_null_bytes_removes_nul_from_misdecoded_ligatures():
 
 
 def test_normalize_page_text_also_strips_null_bytes():
-    assert "\x00" not in _normalize_page_text("O\x00cer Information")
+    assert "\x00" not in normalize_page_text("O\x00cer Information")

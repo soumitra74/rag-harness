@@ -37,14 +37,14 @@ def _strip_null_bytes(text: str) -> str:
     return text.replace("\x00", "")
 
 
-def _normalize_page_text(text: str) -> str:
+def normalize_page_text(text: str) -> str:
     return _DOT_LEADER.sub(" ", _strip_null_bytes(text))
 
 
 def extract_pages(pdf_bytes: bytes) -> list[tuple[int, str]]:
     reader = PdfReader(BytesIO(pdf_bytes))
     return [
-        (i + 1, _normalize_page_text(page.extract_text() or ""))
+        (i + 1, normalize_page_text(page.extract_text() or ""))
         for i, page in enumerate(reader.pages)
     ]
 

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.db import ExperimentConfig
-from app.services.chunking import chunk_page, extract_pages
+from app.services.chunking import chunk_page, extract_pages, normalize_page_text
 
 LOCAL_EMBEDDING_PROVIDERS = {"ollama", "local"}
 
@@ -16,7 +16,8 @@ class IngestResult:
 
 
 async def ingest_pdf(
-    filename: str, pdf_bytes: bytes, db, embedding_provider, config: ExperimentConfig
+    filename: str, pdf_bytes: bytes, db, embedding_provider, config: ExperimentConfig,
+    ocr_page=None,
 ) -> IngestResult:
     # Extracted unconditionally, even on a cache hit below, since page_count
     # is a property of the PDF itself, not of this config's chunking -- a
@@ -36,6 +37,12 @@ async def ingest_pdf(
                 document_id=existing_document_id, chunk_count=existing_chunk_count,
                 page_count=page_count,
             )
+
+    if ocr_page is not None:
+        pages = [
+            (n, normalize_page_text(await ocr_page(pdf_bytes, n)) if not text.strip() else text)
+            for n, text in pages
+        ]
 
     chunks = []
     for page_number, text in pages:
