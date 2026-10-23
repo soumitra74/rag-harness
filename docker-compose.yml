@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fraudrag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraudragpass}
+      POSTGRES_DB: ${POSTGRES_DB:-fraudragdb}
+    ports:
+      - "${POSTGRES_HOST_PORT:-25432}:5432"
+    volumes:
+      - fraud_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fraudrag} -d ${POSTGRES_DB:-fraudragdb}"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  backend:
+    build: ./packages/backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fraudrag}:${POSTGRES_PASSWORD:-fraudragpass}@postgres:5432/${POSTGRES_DB:-fraudragdb}
+      OLLAMA_BASE_URL: http://host.docker.internal:11444
+    ports:
+      - "${BACKEND_HOST_PORT:-8089}:8000"
+    volumes:
+      - ./corpus:/app/corpus:ro
+      - fraud_logs:/app/logs
+      - ./backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  fraud_pgdata:
+  fraud_logs:
