@@ -495,6 +495,21 @@ class Database:
             )
             await conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS llm_usage (
+                    id            SERIAL PRIMARY KEY,
+                    sweep_id      INT NOT NULL REFERENCES sweeps(id),
+                    stage         TEXT NOT NULL,
+                    provider      TEXT NOT NULL,
+                    model         TEXT NOT NULL,
+                    input_tokens  INT NOT NULL,
+                    output_tokens INT NOT NULL,
+                    cost_usd      FLOAT NOT NULL DEFAULT 0,
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            await conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS generated_artifacts (
                     sweep_id     INT NOT NULL REFERENCES sweeps(id),
                     task         TEXT NOT NULL,
@@ -914,6 +929,17 @@ class Database:
                 sweep["corpus_snapshot"] = json.loads(sweep["corpus_snapshot"])
             return sweep
 
+    async def insert_llm_usage(
+        self, sweep_id: int, stage: str, provider: str, model: str,
+        input_tokens: int, output_tokens: int, cost_usd: float,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO llm_usage (sweep_id, stage, provider, model, input_tokens, "
+                "output_tokens, cost_usd) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                sweep_id, stage, provider, model, input_tokens, output_tokens, cost_usd,
+            )
+
     async def sum_ingestion_spend(self, sweep_id: int) -> dict:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -926,8 +952,17 @@ class Database:
                 """,
                 sweep_id,
             )
+            llm_cost = await conn.fetchval(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0) FROM llm_usage
+                WHERE sweep_id = $1
+                  AND stage IN ('inspect_corpus', 'golden_qa', 'propose_next_config', 'summary')
+                """,
+                sweep_id,
+            )
             return {
-                "cost_usd": float(row["cost_usd"]), "minutes": float(row["minutes"]),
+                "cost_usd": float(row["cost_usd"]) + float(llm_cost),
+                "minutes": float(row["minutes"]),
                 "iterations": row["iterations"],
             }
 

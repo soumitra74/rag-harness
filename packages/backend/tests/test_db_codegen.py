@@ -54,3 +54,23 @@ async def test_sweep_without_codegen_budget_has_no_codegen_budget(db):
     finally:
         async with db.pool.acquire() as conn:
             await conn.execute("DELETE FROM sweeps WHERE id = $1", sweep_id)
+
+
+@pytest.mark.asyncio
+async def test_llm_usage_counts_toward_ingestion_spend_except_codegen(db):
+    sweep_id = await db.create_sweep(
+        {"cost_usd": 1, "minutes": 1, "iterations": 1},
+        {"cost_usd": 1, "minutes": 1, "iterations": 1},
+    )
+    try:
+        await db.insert_llm_usage(sweep_id, "inspect_corpus", "openai", "gpt-x", 1000, 500, 0.25)
+        await db.insert_llm_usage(sweep_id, "summary", "openai", "gpt-x", 1000, 500, 0.5)
+        await db.insert_llm_usage(sweep_id, "codegen", "openai", "gpt-x", 1000, 500, 9.0)
+
+        spent = await db.sum_ingestion_spend(sweep_id)
+
+        assert spent["cost_usd"] == pytest.approx(0.75)
+    finally:
+        async with db.pool.acquire() as conn:
+            await conn.execute("DELETE FROM llm_usage WHERE sweep_id = $1", sweep_id)
+            await conn.execute("DELETE FROM sweeps WHERE id = $1", sweep_id)

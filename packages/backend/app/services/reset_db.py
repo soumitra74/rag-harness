@@ -20,7 +20,7 @@ RESET_CATEGORIES: dict[str, ResetCategory] = {
     "ingestion_data": ResetCategory(
         tables=[
             "sweep_configs", "codegen_runs", "generated_artifacts", "sweeps",
-            "ingestion_runs", "experiment_configs",
+            "ingestion_runs", "experiment_configs", "llm_usage",
         ],
         requires=["graph_data", "eval_history"],
     ),

@@ -74,8 +74,11 @@ async def _run_sweep_task(db, sweep_id: int, coro) -> None:
 
 def _get_provider(request: Request):
     if request.app.state.sweep_provider is None:
+        settings = request.app.state.settings
         request.app.state.sweep_provider = MeteredProvider(
-            get_completion_provider(request.app.state.settings)
+            get_completion_provider(settings), request.app.state.db,
+            settings.eval_judge_provider, settings.eval_judge_model,
+            settings.judge_cost_per_1k_in_usd, settings.judge_cost_per_1k_out_usd,
         )
     return request.app.state.sweep_provider
 
@@ -105,7 +108,13 @@ async def start_sweep(request: Request, body: StartSweepRequest):
     if body.codegen is not None:
         _validate_budget(body.codegen, "codegen", CODEGEN_AXES)
         codegen_budget = {axis: getattr(body.codegen, axis) for axis in CODEGEN_AXES}
-        codegen_provider = MeteredProvider(get_codegen_provider(request.app.state.settings))
+        settings = request.app.state.settings
+        codegen_provider = MeteredProvider(
+            get_codegen_provider(settings), request.app.state.db,
+            settings.codegen_provider or settings.eval_judge_provider,
+            settings.codegen_model or settings.eval_judge_model,
+            settings.judge_cost_per_1k_in_usd, settings.judge_cost_per_1k_out_usd,
+        )
 
     if request.app.state.sweep_in_progress:
         raise HTTPException(status_code=409, detail="A sweep is already in progress")

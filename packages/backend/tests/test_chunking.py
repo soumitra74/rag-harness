@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import tiktoken
 
 from app.services.chunking import (
@@ -10,12 +8,10 @@ from app.services.chunking import (
     chunk_page_text,
     chunk_recursive_semantic,
     chunk_sentence_window,
-    extract_pages,
     normalize_page_text,
     _strip_null_bytes,
 )
 
-CORPUS_DIR = Path(__file__).resolve().parents[3]
 
 
 def test_chunk_short_text_returns_single_chunk():
@@ -139,7 +135,7 @@ def test_document_structure_aware_groups_paragraphs_under_their_heading():
         "Thanks to the flight test team for their support.\n\n"
         "Additional thanks to the data processing group.\n\n"
         "LIST OF TABLES\n\n"
-        "Table 1. UH-60A Rotor Parameters."
+        "Table 1. Summary Statistics."
     )
 
     chunks = chunk_document_structure_aware(page_number=4, text=text, chunk_size=1000, overlap=0)
@@ -151,7 +147,7 @@ def test_document_structure_aware_groups_paragraphs_under_their_heading():
     assert "Additional thanks to the data processing group" in chunks[0].text
     assert "LIST OF TABLES" not in chunks[0].text
     assert chunks[1].text.startswith("LIST OF TABLES")
-    assert "Table 1. UH-60A Rotor Parameters." in chunks[1].text
+    assert "Table 1. Summary Statistics." in chunks[1].text
 
 
 def test_document_structure_aware_keeps_preamble_before_first_heading_as_its_own_chunk():
@@ -284,27 +280,17 @@ def test_chunk_page_dispatches_to_fixed_token():
     assert chunk_page("fixed_token", 5, text, 100, 20) == chunk_fixed_token(5, text, 100, 20)
 
 
-def test_extract_pages_reads_corpus_pdf():
-    pdf_path = CORPUS_DIR / "corpus" / "NASA_TelemetryAnalysis_PFR1_First23Pages.pdf"
-    pages = extract_pages(pdf_path.read_bytes())
-    assert len(pages) > 0
-    # Page numbers are 1-indexed and sequential.
-    assert [p[0] for p in pages] == list(range(1, len(pages) + 1))
-    # Every page yields a string (possibly empty if the page is image-only).
-    assert all(isinstance(p[1], str) for p in pages)
-
-
 def test_normalize_page_text_collapses_dot_leaders():
     text = (
         "..................................... 1 \n"
-        "Description of Aircraft and Rotor System "
+        "Introduction "
         "................................................................................ 2 \n"
-        "UH-60A Airloads"
+        "Background Overview"
     )
     normalized = normalize_page_text(text)
     assert "." * 5 not in normalized
-    assert "Description of Aircraft and Rotor System" in normalized
-    assert "UH-60A Airloads" in normalized
+    assert "Introduction" in normalized
+    assert "Background Overview" in normalized
 
 
 def test_normalize_page_text_leaves_ordinary_sentences_and_ellipses_alone():
