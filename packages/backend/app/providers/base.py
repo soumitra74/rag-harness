@@ -9,6 +9,11 @@ class LLMResponse:
     output_tokens: int | None = None
 
 
+def anthropic_text(content_blocks) -> str:
+    # Extended-thinking responses put ThinkingBlocks before the answer text.
+    return "".join(block.text for block in content_blocks if block.type == "text")
+
+
 class ChatProvider(Protocol):
     async def generate(self, question: str, context_chunks: list[str]) -> LLMResponse: ...
 

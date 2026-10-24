@@ -1,7 +1,7 @@
 from anthropic import AsyncAnthropic
 
 from app.config import Settings
-from app.providers.base import LLMResponse, build_prompt
+from app.providers.base import LLMResponse, anthropic_text, build_prompt
 
 
 class AnthropicChatProvider:
@@ -17,7 +17,7 @@ class AnthropicChatProvider:
             messages=[{"role": "user", "content": prompt}],
         )
         return LLMResponse(
-            text=response.content[0].text,
+            text=anthropic_text(response.content),
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
         )
