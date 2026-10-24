@@ -30,7 +30,7 @@ async def backfill_graph_for_config(db, ner, config) -> dict:
                 entity_id = await db.insert_entity(entity.entity_type, entity.normalized_text)
                 entities_touched.add(entity_id)
                 await db.insert_mention(
-                    config.id, str(chunk["id"]), entity_id,
+                    config.id, document_id, str(chunk["id"]), entity_id,
                     entity.char_start, entity.char_end,
                 )
                 mentions_created += 1

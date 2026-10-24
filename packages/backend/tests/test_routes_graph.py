@@ -52,7 +52,7 @@ class FakeDatabase:
     async def insert_entity(self, entity_type, normalized_text):
         return f"entity-{entity_type}-{normalized_text}"
 
-    async def insert_mention(self, config_id, chunk_id, entity_id, char_start, char_end):
+    async def insert_mention(self, config_id, document_id, chunk_id, entity_id, char_start, char_end):
         self.mentions.append((config_id, chunk_id, entity_id))
 
     async def derive_cooccurrence_edges(self, config_id, dim, document_id):

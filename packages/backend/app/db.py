@@ -318,12 +318,15 @@ class Database:
             # Generic edge table for both edge types graph RAG phase 1 needs.
             # source_id/target_id are polymorphic by edge_type:
             #   MENTIONS:       source_id = chunk_id,   target_id = entity_id
+            #                   char_start/char_end = entity span in the chunk
             #   CO_OCCURS_WITH: source_id = entity_id,  target_id = entity_id
             #                   (unordered pair, canonicalized so
             #                   source_id < target_id -- see derive_cooccurrence_edges)
+            #                   chunk_id = chunk the pair was found in,
+            #                   char_start/char_end = span covering both mentions
+            # Every edge carries document_id (documents are the top-level node).
             # config_id is required for MENTIONS (chunk_id is only unique
-            # within a config's own chunks_dim_N table). document_id is
-            # required for CO_OCCURS_WITH since that's what it's scoped by.
+            # within a config's own chunks_dim_N table).
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS graph_edges (
@@ -333,15 +336,37 @@ class Database:
                     target_id    UUID NOT NULL,
                     config_id    INT REFERENCES experiment_configs(id),
                     document_id  UUID REFERENCES documents(id),
+                    chunk_id     UUID,
                     char_start   INT,
                     char_end     INT,
                     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    CHECK (
-                        (edge_type = 'MENTIONS' AND config_id IS NOT NULL AND document_id IS NULL)
+                    CONSTRAINT graph_edges_shape CHECK (
+                        (edge_type = 'MENTIONS' AND config_id IS NOT NULL AND document_id IS NOT NULL)
                         OR
-                        (edge_type = 'CO_OCCURS_WITH' AND document_id IS NOT NULL AND config_id IS NULL)
+                        (edge_type = 'CO_OCCURS_WITH' AND document_id IS NOT NULL
+                            AND config_id IS NULL AND chunk_id IS NOT NULL)
                     )
                 )
+                """
+            )
+            await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS chunk_id UUID")
+            # Co-occurrence rows written before chunk provenance have no evidence; they are derived and rebuilt by backfill.
+            await conn.execute(
+                "DELETE FROM graph_edges WHERE edge_type = 'CO_OCCURS_WITH' AND chunk_id IS NULL"
+            )
+            await conn.execute("ALTER TABLE graph_edges DROP CONSTRAINT IF EXISTS graph_edges_check")
+            await conn.execute(
+                """
+                DO $$ BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'graph_edges_shape') THEN
+                        ALTER TABLE graph_edges ADD CONSTRAINT graph_edges_shape CHECK (
+                            (edge_type = 'MENTIONS' AND config_id IS NOT NULL AND document_id IS NOT NULL)
+                            OR
+                            (edge_type = 'CO_OCCURS_WITH' AND document_id IS NOT NULL
+                                AND config_id IS NULL AND chunk_id IS NOT NULL)
+                        ) NOT VALID;
+                    END IF;
+                END $$
                 """
             )
             await conn.execute(
@@ -357,10 +382,11 @@ class Database:
                     WHERE edge_type = 'MENTIONS'
                 """
             )
+            await conn.execute("DROP INDEX IF EXISTS graph_edges_cooccurs_uniq")
             await conn.execute(
                 """
-                CREATE UNIQUE INDEX IF NOT EXISTS graph_edges_cooccurs_uniq
-                    ON graph_edges (source_id, target_id, document_id)
+                CREATE UNIQUE INDEX IF NOT EXISTS graph_edges_cooccurs_chunk_uniq
+                    ON graph_edges (source_id, target_id, chunk_id)
                     WHERE edge_type = 'CO_OCCURS_WITH'
                 """
             )
@@ -1110,48 +1136,54 @@ class Database:
             )
 
     async def insert_mention(
-        self, config_id: int, chunk_id: str, entity_id: str,
+        self, config_id: int, document_id: str, chunk_id: str, entity_id: str,
         char_start: int | None, char_end: int | None,
     ) -> None:
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO graph_edges
-                    (edge_type, source_id, target_id, config_id, char_start, char_end)
-                VALUES ('MENTIONS', $1, $2, $3, $4, $5)
+                    (edge_type, source_id, target_id, config_id, document_id, char_start, char_end)
+                VALUES ('MENTIONS', $1, $2, $3, $4::uuid, $5, $6)
                 ON CONFLICT (source_id, target_id, config_id) WHERE edge_type = 'MENTIONS'
                     DO NOTHING
                 """,
                 chunk_id,
                 entity_id,
                 config_id,
+                document_id,
                 char_start,
                 char_end,
             )
 
     async def derive_cooccurrence_edges(self, config_id: int, dim: int, document_id: str) -> int:
-        """Links every pair of distinct entities that each have a MENTIONS
-        edge to some chunk of this document, under this config. Call once per
-        document after all its chunks' mentions have been inserted."""
+        """Links every pair of distinct entities mentioned in the same chunk of
+        this document, under this config. The edge's span covers both mentions
+        so it can be shown as evidence. Call once per document after all its
+        chunks' mentions have been inserted."""
         table = f"chunks_dim_{int(dim)}"
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
-                INSERT INTO graph_edges (edge_type, source_id, target_id, document_id)
-                SELECT DISTINCT 'CO_OCCURS_WITH',
-                       LEAST(e1.target_id, e2.target_id),
-                       GREATEST(e1.target_id, e2.target_id),
-                       $2::uuid
+                INSERT INTO graph_edges
+                    (edge_type, source_id, target_id, document_id, chunk_id, char_start, char_end)
+                SELECT 'CO_OCCURS_WITH',
+                       e1.target_id,
+                       e2.target_id,
+                       $2::uuid,
+                       e1.source_id,
+                       LEAST(e1.char_start, e2.char_start),
+                       GREATEST(e1.char_end, e2.char_end)
                 FROM graph_edges e1
-                JOIN {table} c1 ON c1.id = e1.source_id
-                JOIN graph_edges e2 ON e2.config_id = e1.config_id
-                JOIN {table} c2 ON c2.id = e2.source_id
-                WHERE e1.edge_type = 'MENTIONS' AND e2.edge_type = 'MENTIONS'
-                  AND e1.config_id = $1
-                  AND c1.document_id = $2::uuid AND c2.document_id = $2::uuid
-                  AND e1.target_id != e2.target_id
-                ON CONFLICT (source_id, target_id, document_id) WHERE edge_type = 'CO_OCCURS_WITH'
-                    DO NOTHING
+                JOIN graph_edges e2
+                  ON e2.source_id = e1.source_id
+                 AND e2.config_id = e1.config_id
+                 AND e2.edge_type = 'MENTIONS'
+                 AND e2.target_id > e1.target_id
+                JOIN {table} c ON c.id = e1.source_id
+                WHERE e1.edge_type = 'MENTIONS' AND e1.config_id = $1
+                  AND c.document_id = $2::uuid
+                ON CONFLICT DO NOTHING
                 RETURNING id
                 """,
                 config_id,
@@ -1263,7 +1295,8 @@ class Database:
             rows = await conn.fetch(
                 f"""
                 SELECT ea.entity_type AS entity_type_a, ea.entity_text AS entity_text_a,
-                       eb.entity_type AS entity_type_b, eb.entity_text AS entity_text_b
+                       eb.entity_type AS entity_type_b, eb.entity_text AS entity_text_b,
+                       e.chunk_id, e.char_start, e.char_end
                 FROM graph_edges e
                 JOIN graph_entities ea ON ea.id = e.source_id
                 JOIN graph_entities eb ON eb.id = e.target_id
