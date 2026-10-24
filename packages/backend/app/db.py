@@ -1526,6 +1526,13 @@ class Database:
                 )
                 return result is not None
 
+    async def get_eval_cycle_aggregates(self, cycle_id: int) -> dict | None:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval("SELECT aggregates FROM eval_cycles WHERE id = $1", cycle_id)
+            if value is None:
+                return None
+            return json.loads(value) if isinstance(value, str) else dict(value)
+
     async def get_eval_cycle_summary(self, cycle_id: int) -> dict | None:
         """Just enough to start a reval: which config it ran against and how
         many questions -- not the full per_query detail list_eval_cycles()

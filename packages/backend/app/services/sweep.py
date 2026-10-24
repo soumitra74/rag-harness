@@ -21,7 +21,7 @@ from app.services.graph_backfill import backfill_graph_for_config
 from app.services.ingest import ingest_pdf, record_ingestion_metrics
 from app.services.quality_gate import load_quality_gate
 from app.services.sweep_budget import check_eval_budget, check_ingestion_budget
-from app.services.sweep_log import progress_log
+from app.services.sweep_log import progress_log, stage
 from app.services.sweep_next_config import TriedConfig, propose_next_config
 from app.services.sweep_scoring import load_scoring_weights, rank_configs
 from app.services.sweep_summary import generate_sweep_summary
@@ -75,28 +75,30 @@ async def _ingest_and_backfill_config(db, ner, settings, config, sweep_id: int |
         if "ocr" in artifacts
         else None
     )
-    corpus_path = Path(settings.corpus_dir)
-    start = time.monotonic()
-    input_size_bytes = 0
-    results = []
-    for filename in list_pdf_filenames(settings.corpus_dir):
-        pdf_bytes = (corpus_path / filename).read_bytes()
-        input_size_bytes += len(pdf_bytes)
-        try:
-            result = await ingest_pdf(
-                filename, pdf_bytes, db, embedding_provider, config, ocr_page=ocr_page,
-            )
-            results.append({
-                "filename": filename, "document_id": result.document_id,
-                "chunk_count": result.chunk_count, "page_count": result.page_count,
-            })
-        except Exception as exc:
-            results.append({"filename": filename, "error": str(exc)})
-    await record_ingestion_metrics(db, config, results, input_size_bytes, start, settings, sweep_id)
-    errors = sum(1 for r in results if "error" in r)
-    progress_log.info("sweep %s: config %d ingested %d file(s), %d error(s), %.1fs",
-                      sweep_id, config.id, len(results), errors, time.monotonic() - start)
-    await backfill_graph_for_config(db, ner, config)
+    with stage(sweep_id, "ingest", config=config.id):
+        corpus_path = Path(settings.corpus_dir)
+        start = time.monotonic()
+        input_size_bytes = 0
+        results = []
+        for filename in list_pdf_filenames(settings.corpus_dir):
+            pdf_bytes = (corpus_path / filename).read_bytes()
+            input_size_bytes += len(pdf_bytes)
+            try:
+                result = await ingest_pdf(
+                    filename, pdf_bytes, db, embedding_provider, config, ocr_page=ocr_page,
+                )
+                results.append({
+                    "filename": filename, "document_id": result.document_id,
+                    "chunk_count": result.chunk_count, "page_count": result.page_count,
+                })
+            except Exception as exc:
+                results.append({"filename": filename, "error": str(exc)})
+        await record_ingestion_metrics(db, config, results, input_size_bytes, start, settings, sweep_id)
+        errors = sum(1 for r in results if "error" in r)
+        progress_log.info("sweep %s: config %d ingested %d file(s), %d error(s), %.1fs",
+                          sweep_id, config.id, len(results), errors, time.monotonic() - start)
+    with stage(sweep_id, "graph_backfill", config=config.id):
+        await backfill_graph_for_config(db, ner, config)
 
 
 async def _create_and_ingest_candidate(db, ner, settings, candidate, sweep_id: int | None):
@@ -127,31 +129,32 @@ async def run_bootstrap(
         # clear empty-corpus error from inspect_corpus ever fires (review
         # finding I-2). inspect_corpus itself raises on empty, so simply
         # calling it first is enough to gate both checks on the same signal.
-        candidates = await inspect_corpus(provider, settings.corpus_dir)
+        with stage(sweep_id, "inspect_corpus"):
+            candidates = await inspect_corpus(provider, settings.corpus_dir)
         if codegen_tasks:
             ctx = CodegenContext(settings=settings, ner=ner, sandbox_url=settings.codegen_sandbox_url)
-            await run_codegen_tasks(
-                db, codegen_provider or provider, ctx, sweep_id, codegen_tasks, codegen_budget,
-            )
+            with stage(sweep_id, "codegen", tasks=",".join(codegen_tasks)):
+                await run_codegen_tasks(
+                    db, codegen_provider or provider, ctx, sweep_id, codegen_tasks, codegen_budget,
+                )
         else:
             reused = load_artifact_files(settings.generated_dir)
             for task, content in reused.items():
                 await db.upsert_generated_artifact(sweep_id, task, content)
             progress_log.info("sweep %s: reused generated code: %s", sweep_id, sorted(reused) or "none")
-        await _ensure_golden_qa(provider, settings, generate_golden_qa_flag)
+        with stage(sweep_id, "golden_qa", enabled=generate_golden_qa_flag):
+            await _ensure_golden_qa(provider, settings, generate_golden_qa_flag)
         await db.set_corpus_snapshot(sweep_id, list_pdf_filenames(settings.corpus_dir))
         progress_log.info("sweep %s: %d candidate config(s) proposed", sweep_id, len(candidates))
 
         ingested = []
         for index, candidate in enumerate(candidates, start=1):
-            progress_log.info(
-                "sweep %s: ingesting candidate %d/%d (%s, chunk_size=%d, overlap=%d)",
-                sweep_id, index, len(candidates), candidate.chunking_strategy,
-                candidate.chunk_size, candidate.chunk_overlap,
-            )
-            config = await _create_and_ingest_candidate(db, ner, settings, candidate, sweep_id)
-            progress_log.info("sweep %s: candidate %d/%d ingested as config %d",
-                              sweep_id, index, len(candidates), config.id)
+            with stage(
+                sweep_id, "candidate", index=f"{index}/{len(candidates)}",
+                strategy=candidate.chunking_strategy, chunk_size=candidate.chunk_size,
+                overlap=candidate.chunk_overlap,
+            ):
+                config = await _create_and_ingest_candidate(db, ner, settings, candidate, sweep_id)
             ingested.append((config, candidate.rationale))
 
         for config, rationale in ingested:
@@ -206,6 +209,13 @@ async def _run_eval_combo(
         judge_cost_per_1k_out_usd=settings.judge_cost_per_1k_out_usd,
         local_compute_cost_per_hour=settings.local_compute_cost_per_hour,
         chat_provider_name=settings.chat_provider, eval_judge_provider_name=settings.eval_judge_provider,
+    )
+    aggregates = await db.get_eval_cycle_aggregates(cycle_id) or {}
+    progress_log.info(
+        "sweep %s: eval cycle %s tokens generation_in=%s generation_out=%s judge_in=%s judge_out=%s",
+        sweep_id, cycle_id, aggregates.get("total_generation_input_tokens"),
+        aggregates.get("total_generation_output_tokens"), aggregates.get("total_eval_input_tokens"),
+        aggregates.get("total_eval_output_tokens"),
     )
     return cycle_id
 
@@ -266,9 +276,10 @@ async def _propose_and_record_next(
         await db.update_sweep_status(sweep_id, "awaiting_suggestion")
         return True
 
-    result = await propose_next_config(
-        provider, _corpus_summary_text(settings), tried, sweep_row["ingestion_budget"], user_hint,
-    )
+    with stage(sweep_id, "propose_next_config"):
+        result = await propose_next_config(
+            provider, _corpus_summary_text(settings), tried, sweep_row["ingestion_budget"], user_hint,
+        )
     if result.converged:
         await db.update_sweep_status(sweep_id, "awaiting_suggestion")
         return True
@@ -288,9 +299,10 @@ async def finalize_sweep_run(db, provider, settings, sweep_id: int, stop_reason:
     tried = await _build_tried_configs(db, sweep_id, settings)
     passing = [t for t in tried if t.score is not None]
     best = max(passing, key=lambda t: t.score, default=None)
-    summary = await generate_sweep_summary(
-        provider, _corpus_summary_text(settings), tried, stop_reason, best,
-    )
+    with stage(sweep_id, "summary", stop_reason=stop_reason):
+        summary = await generate_sweep_summary(
+            provider, _corpus_summary_text(settings), tried, stop_reason, best,
+        )
     best_config_id = best.config_id if best is not None else None
     await db.finalize_sweep(sweep_id, stop_reason, summary, best_config_id,
                              best.score if best else None)
@@ -314,8 +326,9 @@ async def run_sweep_loop(db, provider, chat_provider, judge, ner, settings, swee
         for idx, combo in enumerate(INNER_GRID):
             if idx in evaluated:
                 continue
-            await _run_eval_combo(db, provider, chat_provider, judge, ner, settings, config,
-                                   combo, sweep_id)
+            with stage(sweep_id, "eval_combo", config=config.id, combo=f"{idx + 1}/{len(INNER_GRID)}"):
+                await _run_eval_combo(db, provider, chat_provider, judge, ner, settings, config,
+                                       combo, sweep_id)
             evaluated.add(idx)
             await db.update_sweep_config_evaluated_combos(pending["id"], sorted(evaluated))
             progress_log.info("sweep %s: config %d combo %d/%d done (top_k=%s, rerank=%s, graph=%s)",

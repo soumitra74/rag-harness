@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.services.codegen import CODEGEN_AXES, reset_graph_labels
 from app.services.judge import get_codegen_provider, get_completion_provider
+from app.services.sweep_log import MeteredProvider
 from app.services.sweep import (
     apply_user_suggestion,
     finalize_sweep_run,
@@ -73,7 +74,9 @@ async def _run_sweep_task(db, sweep_id: int, coro) -> None:
 
 def _get_provider(request: Request):
     if request.app.state.sweep_provider is None:
-        request.app.state.sweep_provider = get_completion_provider(request.app.state.settings)
+        request.app.state.sweep_provider = MeteredProvider(
+            get_completion_provider(request.app.state.settings)
+        )
     return request.app.state.sweep_provider
 
 
@@ -102,7 +105,7 @@ async def start_sweep(request: Request, body: StartSweepRequest):
     if body.codegen is not None:
         _validate_budget(body.codegen, "codegen", CODEGEN_AXES)
         codegen_budget = {axis: getattr(body.codegen, axis) for axis in CODEGEN_AXES}
-        codegen_provider = get_codegen_provider(request.app.state.settings)
+        codegen_provider = MeteredProvider(get_codegen_provider(request.app.state.settings))
 
     if request.app.state.sweep_in_progress:
         raise HTTPException(status_code=409, detail="A sweep is already in progress")

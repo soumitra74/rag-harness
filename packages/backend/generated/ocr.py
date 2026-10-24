@@ -1,42 +1,45 @@
+"""OCR a single image-only PDF page using pypdfium2 for rendering and pytesseract for recognition."""
+
 import pypdfium2 as pdfium
 import pytesseract
 from PIL import Image
 
+_OCR_DPI = 300
+_PDF_BASE_DPI = 72
+
 
 def ocr_page(pdf_path: str, page_number: int) -> str:
-    """Render one (1-based) PDF page with pypdfium2 and OCR it with Tesseract (English).
+    """Render the given 1-based PDF page and return its OCR'd English text as UTF-8 str.
 
-    Returns the recognized plain text as a UTF-8 string.
+    Raises:
+        TypeError: if page_number is not an int.
+        ValueError: if page_number is outside the document's page range.
     """
-    if page_number < 1:
-        raise ValueError(f"page_number must be 1-based and >= 1, got {page_number}")
+    if isinstance(page_number, bool) or not isinstance(page_number, int):
+        raise TypeError("page_number must be an int")
 
     pdf = pdfium.PdfDocument(pdf_path)
-    page = None
     try:
         page_count = len(pdf)
-        if page_number > page_count:
+        if not 1 <= page_number <= page_count:
             raise ValueError(
-                f"page_number {page_number} is out of range (document has {page_count} pages)"
+                f"page_number {page_number} out of range (document has {page_count} pages)"
             )
 
         page = pdf[page_number - 1]
-
-        # Render at 300 DPI for reasonable OCR accuracy (PDF default is 72 DPI).
-        scale = 300.0 / 72.0
-        bitmap = page.render(scale=scale)
-        image = bitmap.to_pil()
-
-        # Normalize to RGB so Tesseract receives a consistent image mode.
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        text = pytesseract.image_to_string(image, lang="eng")
-
-        # Ensure the result is clean UTF-8 text.
-        return text.encode("utf-8", errors="replace").decode("utf-8")
-    finally:
-        if page is not None:
+        try:
+            scale = _OCR_DPI / _PDF_BASE_DPI
+            bitmap = page.render(scale=scale)
+            try:
+                image: Image.Image = bitmap.to_pil()
+                if image.mode not in ("L", "RGB"):
+                    image = image.convert("RGB")
+                text = pytesseract.image_to_string(image, lang="eng")
+            finally:
+                bitmap.close()
+        finally:
             page.close()
+    finally:
         pdf.close()
 
+    return text.encode("utf-8", errors="replace").decode("utf-8")
