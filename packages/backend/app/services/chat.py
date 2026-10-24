@@ -91,6 +91,9 @@ async def retrieve_candidates(
         pairs = [(e.entity_type, e.normalized_text) for e in extracted]
         entity_ids = await db.find_entities(pairs) if pairs else []
         if entity_ids:
+            fact_rows = await db.get_asserted_fact_chunks(
+                config.id, config.embedding_dim, entity_ids, question_embedding, fetch_k
+            )
             graph_rows = await db.get_chunks_mentioning_entities(
                 config.id, config.embedding_dim, entity_ids, question_embedding, fetch_k
             )
@@ -98,6 +101,8 @@ async def retrieve_candidates(
             for row in graph_rows:
                 merged.setdefault(row["id"], row)
             candidate_rows = sorted(merged.values(), key=lambda r: r["distance"])
+            fact_ids = {row["id"] for row in fact_rows}
+            candidate_rows = fact_rows + [r for r in candidate_rows if r["id"] not in fact_ids]
 
     return candidate_rows
 

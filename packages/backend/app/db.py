@@ -1258,6 +1258,33 @@ class Database:
             )
             return [dict(row) for row in rows]
 
+    async def get_asserted_fact_chunks(
+        self, config_id: int, dim: int, entity_ids: list[str],
+        embedding: list[float], limit: int,
+    ) -> list[dict]:
+        if not entity_ids:
+            return []
+        table = f"chunks_dim_{int(dim)}"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT DISTINCT c.id, c.chunk_text, c.context_text, c.page_number, d.filename,
+                       c.embedding <=> $4 AS distance
+                FROM graph_edges e
+                JOIN {table} c ON c.id = e.chunk_id AND c.config_id = $1
+                JOIN documents d ON d.id = c.document_id
+                WHERE e.edge_type = 'ASSERTS'
+                  AND (e.source_id = ANY($2::uuid[]) OR e.target_id = ANY($2::uuid[]))
+                ORDER BY distance
+                LIMIT $3
+                """,
+                config_id,
+                entity_ids,
+                limit,
+                embedding,
+            )
+            return [dict(row) for row in rows]
+
     async def list_graph_entities(
         self, config_id: int, dim: int, document_id: str, page: int, page_size: int,
     ) -> tuple[list[dict], int]:

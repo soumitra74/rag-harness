@@ -243,6 +243,9 @@ class FakeDatabaseWithGraphMatch:
         assert pairs == [("DATA_COUNTER_ID", "9017")]
         return ["entity-1"]
 
+    async def get_asserted_fact_chunks(self, config_id, dim, entity_ids, embedding, limit):
+        return []
+
     async def get_chunks_mentioning_entities(self, config_id, dim, entity_ids, embedding, limit):
         assert entity_ids == ["entity-1"]
         return [

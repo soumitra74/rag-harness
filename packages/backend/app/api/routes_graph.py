@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.services.graph_backfill import backfill_graph_for_config, rebuild_cooccurrences_for_config
+from app.services.graph_families import family_of
 
 router = APIRouter()
 
@@ -78,7 +79,7 @@ async def list_cooccurrences(
     db = request.app.state.db
     pairs, total = await db.list_cooccurrences(document_id, entity_type, page, page_size)
     return {
-        "cooccurrences": [dict(p) for p in pairs],
+        "cooccurrences": [{**dict(p), "family": family_of("CO_OCCURS_WITH")} for p in pairs],
         "total": total,
         "page": page,
         "page_size": page_size,
