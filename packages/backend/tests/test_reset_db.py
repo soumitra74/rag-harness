@@ -11,11 +11,15 @@ from app.services.reset_db import (
 
 
 def test_resolve_categories_expands_documents_to_its_dependencies():
-    assert resolve_categories(["documents"]) == {"documents", "graph_data", "golden_qa"}
+    assert resolve_categories(["documents"]) == {
+        "documents", "graph_data", "golden_qa", "eval_history", "rca_sessions",
+    }
 
 
-def test_resolve_categories_expands_ingestion_data_to_graph_data():
-    assert resolve_categories(["ingestion_data"]) == {"ingestion_data", "graph_data"}
+def test_resolve_categories_expands_ingestion_data_to_everything_referencing_configs():
+    assert resolve_categories(["ingestion_data"]) == {
+        "ingestion_data", "graph_data", "eval_history", "rca_sessions",
+    }
 
 
 def test_resolve_categories_empty_selection_resolves_to_empty_set():
@@ -137,27 +141,28 @@ async def test_execute_reset_drops_chunk_tables_only_when_ingestion_data_selecte
 
 
 @pytest.mark.asyncio
-async def test_execute_reset_groups_fixed_tables_excluding_rca_sessions():
+async def test_execute_reset_truncates_all_resolved_tables_in_one_statement():
     db = FakeExecuteDatabase(chunk_tables=[])
 
     await execute_reset(db, {"graph_data", "eval_history", "rca_sessions"})
 
     _, groups = db.reset_tables_calls[-1]
-    assert len(groups) == 2
-    main_group, rca_group = groups
-    assert set(main_group) == {"graph_entities", "graph_edges", "eval_cycles", "eval_runs"}
-    assert "rca_sessions" not in main_group and "rca_messages" not in main_group
-    assert set(rca_group) == {"rca_sessions", "rca_messages"}
+    assert len(groups) == 1
+    assert set(groups[0]) == {
+        "graph_entities", "graph_edges", "eval_cycles", "eval_runs", "rca_sessions", "rca_messages",
+    }
 
 
 @pytest.mark.asyncio
-async def test_execute_reset_skips_rca_group_when_not_selected():
-    db = FakeExecuteDatabase(chunk_tables=[])
+async def test_execute_reset_ingestion_data_includes_sweep_and_config_dependents():
+    db = FakeExecuteDatabase(chunk_tables=["chunks_dim_768"])
 
-    await execute_reset(db, {"graph_data"})
+    await execute_reset(db, {"ingestion_data", "graph_data", "eval_history", "rca_sessions"})
 
-    _, groups = db.reset_tables_calls[-1]
-    assert len(groups) == 1
+    chunk_tables, groups = db.reset_tables_calls[-1]
+    assert chunk_tables == ["chunks_dim_768"]
+    assert {"experiment_configs", "sweeps", "sweep_configs", "codegen_runs",
+            "generated_artifacts", "ingestion_runs"} <= set(groups[0])
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,11 @@ class ResetCategory:
 # preview counting rows in tables it can't name in advance.
 RESET_CATEGORIES: dict[str, ResetCategory] = {
     "ingestion_data": ResetCategory(
-        tables=["experiment_configs", "ingestion_runs"], requires=["graph_data"],
+        tables=[
+            "sweep_configs", "codegen_runs", "generated_artifacts", "sweeps",
+            "ingestion_runs", "experiment_configs",
+        ],
+        requires=["graph_data", "eval_history"],
     ),
     "documents": ResetCategory(
         tables=["documents"], requires=["graph_data", "golden_qa"],
@@ -25,10 +29,10 @@ RESET_CATEGORIES: dict[str, ResetCategory] = {
         tables=["graph_entities", "graph_edges"], requires=[],
     ),
     "golden_qa": ResetCategory(
-        tables=["eval_queries", "eval_query_gold_pages"], requires=[],
+        tables=["eval_queries", "eval_query_gold_pages"], requires=["eval_history"],
     ),
     "eval_history": ResetCategory(
-        tables=["eval_cycles", "eval_runs"], requires=[],
+        tables=["eval_cycles", "eval_runs"], requires=["rca_sessions"],
     ),
     "rca_sessions": ResetCategory(
         tables=["rca_sessions", "rca_messages"], requires=[],
@@ -105,13 +109,13 @@ async def backup_before_reset(
 
 async def execute_reset(db, categories: set[str]) -> None:
     chunk_tables = await db.list_chunk_tables() if "ingestion_data" in categories else []
-
-    rca_tables = set(RESET_CATEGORIES["rca_sessions"].tables)
-    fixed_tables = sorted(_resolved_tables(categories) - rca_tables)
-    groups = [g for g in (fixed_tables, sorted(rca_tables) if "rca_sessions" in categories else []) if g]
+    # One TRUNCATE for every resolved table: Postgres checks foreign keys at
+    # TRUNCATE time, so a referencing table cleared in a later statement still
+    # blocks an earlier one.
+    tables = sorted(_resolved_tables(categories))
 
     try:
-        await db.reset_tables(chunk_tables, groups)
+        await db.reset_tables(chunk_tables, [tables] if tables else [])
     except Exception as exc:
         raise ResetBlockedError(
             f"Reset blocked: {exc}. Data outside the selected categories (for example, "
