@@ -20,6 +20,7 @@ from app.services.graph_backfill import backfill_graph_for_config
 from app.services.ingest import ingest_pdf, record_ingestion_metrics
 from app.services.quality_gate import load_quality_gate
 from app.services.sweep_budget import check_eval_budget, check_ingestion_budget
+from app.services.sweep_log import progress_log
 from app.services.sweep_next_config import TriedConfig, propose_next_config
 from app.services.sweep_scoring import load_scoring_weights, rank_configs
 from app.services.sweep_summary import generate_sweep_summary
@@ -69,7 +70,9 @@ async def _ingest_and_backfill_config(db, ner, settings, config, sweep_id: int |
     artifacts = await db.get_generated_artifacts(sweep_id) if sweep_id is not None else {}
     apply_graph_labels(ner, artifacts.get("graph_labels"))
     ocr_page = (
-        make_ocr_page(settings.codegen_sandbox_url, artifacts["ocr"]) if "ocr" in artifacts else None
+        make_ocr_page(settings.codegen_sandbox_url, artifacts["ocr"], settings.codegen_debug)
+        if "ocr" in artifacts
+        else None
     )
     corpus_path = Path(settings.corpus_dir)
     start = time.monotonic()
@@ -89,6 +92,9 @@ async def _ingest_and_backfill_config(db, ner, settings, config, sweep_id: int |
         except Exception as exc:
             results.append({"filename": filename, "error": str(exc)})
     await record_ingestion_metrics(db, config, results, input_size_bytes, start, settings, sweep_id)
+    errors = sum(1 for r in results if "error" in r)
+    progress_log.info("sweep %s: config %d ingested %d file(s), %d error(s), %.1fs",
+                      sweep_id, config.id, len(results), errors, time.monotonic() - start)
     await backfill_graph_for_config(db, ner, config)
 
 
@@ -109,7 +115,10 @@ async def _create_and_ingest_candidate(db, ner, settings, candidate, sweep_id: i
 async def run_bootstrap(
     db, provider, ner, settings, sweep_id: int, generate_golden_qa_flag: bool,
     codegen_tasks: list[str] | None = None, codegen_budget: dict | None = None,
+    codegen_provider=None,
 ) -> None:
+    progress_log.info("sweep %s: bootstrap started (codegen=%s, golden_qa=%s)",
+                      sweep_id, codegen_tasks or "off", generate_golden_qa_flag)
     try:
         # Corpus-emptiness must be checked before golden-QA generation: with
         # the flag on, generating first would ask the LLM to hallucinate a
@@ -120,13 +129,23 @@ async def run_bootstrap(
         candidates = await inspect_corpus(provider, settings.corpus_dir)
         if codegen_tasks:
             ctx = CodegenContext(settings=settings, ner=ner, sandbox_url=settings.codegen_sandbox_url)
-            await run_codegen_tasks(db, provider, ctx, sweep_id, codegen_tasks, codegen_budget)
+            await run_codegen_tasks(
+                db, codegen_provider or provider, ctx, sweep_id, codegen_tasks, codegen_budget,
+            )
         await _ensure_golden_qa(provider, settings, generate_golden_qa_flag)
         await db.set_corpus_snapshot(sweep_id, list_pdf_filenames(settings.corpus_dir))
+        progress_log.info("sweep %s: %d candidate config(s) proposed", sweep_id, len(candidates))
 
         ingested = []
-        for candidate in candidates:
+        for index, candidate in enumerate(candidates, start=1):
+            progress_log.info(
+                "sweep %s: ingesting candidate %d/%d (%s, chunk_size=%d, overlap=%d)",
+                sweep_id, index, len(candidates), candidate.chunking_strategy,
+                candidate.chunk_size, candidate.chunk_overlap,
+            )
             config = await _create_and_ingest_candidate(db, ner, settings, candidate, sweep_id)
+            progress_log.info("sweep %s: candidate %d/%d ingested as config %d",
+                              sweep_id, index, len(candidates), config.id)
             ingested.append((config, candidate.rationale))
 
         for config, rationale in ingested:
@@ -138,7 +157,9 @@ async def run_bootstrap(
             await db.create_sweep_config(sweep_id, config.id, rationale, "ingested", "bootstrap")
 
         await db.update_sweep_status(sweep_id, "awaiting_approval")
+        progress_log.info("sweep %s: bootstrap complete, awaiting approval", sweep_id)
     except (CorpusInspectionError, GoldenQAGenerationError, CodegenFailed) as exc:
+        progress_log.error("sweep %s: bootstrap failed: %s", sweep_id, exc)
         await db.update_sweep_status(sweep_id, "failed", error_message=str(exc))
 
 
@@ -281,6 +302,8 @@ async def run_sweep_loop(db, provider, chat_provider, judge, ner, settings, swee
 
         config = await _ensure_ingested_for_loop(db, ner, settings, pending, sweep_id)
         evaluated = set(pending["evaluated_combos"])
+        progress_log.info("sweep %s: evaluating config %d (%d/%d combos done)",
+                          sweep_id, config.id, len(evaluated), len(INNER_GRID))
 
         for idx, combo in enumerate(INNER_GRID):
             if idx in evaluated:
@@ -289,9 +312,14 @@ async def run_sweep_loop(db, provider, chat_provider, judge, ner, settings, swee
                                    combo, sweep_id)
             evaluated.add(idx)
             await db.update_sweep_config_evaluated_combos(pending["id"], sorted(evaluated))
+            progress_log.info("sweep %s: config %d combo %d/%d done (top_k=%s, rerank=%s, graph=%s)",
+                              sweep_id, config.id, len(evaluated), len(INNER_GRID),
+                              combo["top_k"], combo["rerank_model"] is not None,
+                              combo["graph_augmented"])
 
             if await check_eval_budget(db, sweep_id, sweep_row["eval_budget"]) or \
                await check_ingestion_budget(db, sweep_id, sweep_row["ingestion_budget"]):
+                progress_log.warning("sweep %s: budget exhausted, stopping", sweep_id)
                 await finalize_sweep_run(db, provider, settings, sweep_id, "stopped_budget")
                 return
 
@@ -299,6 +327,7 @@ async def run_sweep_loop(db, provider, chat_provider, judge, ner, settings, swee
 
         converged = await _propose_and_record_next(db, provider, settings, sweep_id, sweep_row)
         if converged:
+            progress_log.info("sweep %s: converged, awaiting suggestion", sweep_id)
             return
 
 

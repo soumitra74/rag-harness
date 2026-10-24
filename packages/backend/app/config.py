@@ -79,6 +79,7 @@ class Settings(BaseSettings):
 
     # Isolated executor for LLM-generated code (see packages/codegen-sandbox).
     codegen_sandbox_url: str = "http://codegen-sandbox:8000"
+    codegen_debug: bool = False
 
     # Judge LLM for scoring eval-cycle answers. Deliberately a different
     # model than the config's own chat_provider to avoid self-preference
@@ -87,6 +88,11 @@ class Settings(BaseSettings):
     # single source of truth rather than being duplicated into the backend.
     eval_judge_provider: str = "openai"
     eval_judge_model: str = "gpt-4o-mini"
+
+    # LLM for sweep code generation (see codegen.py). Unset falls back to the
+    # eval judge provider and model.
+    codegen_provider: str | None = None
+    codegen_model: str | None = None
     eval_dataset_path: str = "eval/golden_qa.json"
 
     # Cost-rate inputs for the optimization harness's budget tracking (see

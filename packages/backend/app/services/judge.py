@@ -7,7 +7,7 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from app.config import Settings
-from app.providers.base import LLMResponse
+from app.providers.base import LLMResponse, anthropic_text
 from app.services.llm_json import extract_json
 
 
@@ -29,7 +29,7 @@ class AnthropicCompletionProvider:
             messages=[{"role": "user", "content": prompt}],
         )
         return LLMResponse(
-            text=response.content[0].text,
+            text=anthropic_text(response.content),
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
         )
@@ -88,6 +88,17 @@ def get_completion_provider(settings: Settings) -> CompletionProvider:
     if settings.eval_judge_provider == "ollama":
         return OllamaCompletionProvider(settings)
     raise ValueError(f"Unknown eval_judge_provider: {settings.eval_judge_provider!r}")
+
+
+def get_codegen_provider(settings: Settings) -> CompletionProvider:
+    if settings.codegen_provider is None and settings.codegen_model is None:
+        return get_completion_provider(settings)
+    overrides = {}
+    if settings.codegen_provider is not None:
+        overrides["eval_judge_provider"] = settings.codegen_provider
+    if settings.codegen_model is not None:
+        overrides["eval_judge_model"] = settings.codegen_model
+    return get_completion_provider(settings.model_copy(update=overrides))
 
 
 @dataclass
