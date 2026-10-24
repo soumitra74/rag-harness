@@ -1,10 +1,12 @@
 import base64
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -17,6 +19,8 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 HARNESS = Path(__file__).with_name("harness.py")
 
 app = FastAPI(title="Codegen sandbox")
+log = logging.getLogger("uvicorn.error.codegen_sandbox")
+DEBUG = os.environ.get("CODEGEN_DEBUG", "false").lower() == "true"
 
 
 class RunRequest(BaseModel):
@@ -47,6 +51,11 @@ def health() -> dict:
 
 @app.post("/run", response_model=RunResponse)
 def run(req: RunRequest) -> RunResponse:
+    started = time.monotonic()
+    if DEBUG:
+        log.info("run entrypoint=%s args=%r files=%s code_bytes=%d timeout=%ds",
+                 req.entrypoint, req.args, {n: len(b) for n, b in req.files.items()},
+                 len(req.code.encode()), req.timeout_s)
     with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
         workdir = Path(tmp)
         try:
@@ -69,11 +78,17 @@ def run(req: RunRequest) -> RunResponse:
                 } | {"HOME": tmp, "PYTHONDONTWRITEBYTECODE": "1"},
             )
         except subprocess.TimeoutExpired:
+            log.warning("run timed out after %ds entrypoint=%s", req.timeout_s, req.entrypoint)
             return RunResponse(ok=False, error=f"Timed out after {req.timeout_s}s")
 
     stdout = proc.stdout[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
+    if DEBUG:
+        log.info("subprocess exit=%d in %.1fs stdout_bytes=%d stderr_bytes=%d",
+                 proc.returncode, time.monotonic() - started, len(proc.stdout), len(proc.stderr))
     if proc.returncode != 0 or RESULT_MARKER not in stdout:
         stderr_tail = proc.stderr[-2000:].decode("utf-8", errors="replace")
+        log.warning("run failed entrypoint=%s exit=%d stderr_tail=%s",
+                    req.entrypoint, proc.returncode, stderr_tail)
         return RunResponse(ok=False, error=stderr_tail or "No result produced")
     try:
         result = json.loads(stdout.rsplit(RESULT_MARKER, 1)[1])

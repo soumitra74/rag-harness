@@ -5,14 +5,19 @@ import json
 import re
 import time
 from collections import Counter
+from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
+from pypdf import PdfReader
+
 from app.services.chunking import extract_pages, normalize_page_text
 from app.services.ner import ENTITY_LABELS
 from app.services.sweep_budget import budget_exhausted
+from app.services.pricing import token_cost_usd
+from app.services.sweep_log import progress_log
 
 CODEGEN_AXES = ("cost_usd", "minutes", "attempts")
 LABEL_PATTERN = re.compile(r"^[A-Z][A-Z_]{2,31}$")
@@ -79,7 +84,7 @@ class CodegenContext:
 
 async def run_in_sandbox(
     sandbox_url: str, code: str, entrypoint: str, args: list,
-    files: dict[str, bytes] | None = None, timeout_s: int = 60,
+    files: dict[str, bytes] | None = None, timeout_s: int = 60, debug: bool = False,
 ):
     body = {
         "code": code,
@@ -88,10 +93,23 @@ async def run_in_sandbox(
         "timeout_s": timeout_s,
         "files": {name: base64.b64encode(data).decode() for name, data in (files or {}).items()},
     }
+    if debug:
+        progress_log.info(
+            "codegen debug: sandbox request entrypoint=%s args=%r files=%s code_bytes=%d timeout=%ds",
+            entrypoint, args, {name: len(data) for name, data in (files or {}).items()},
+            len(code.encode()), timeout_s,
+        )
+    started = time.monotonic()
     async with httpx.AsyncClient(timeout=timeout_s + 15) as client:
         response = await client.post(f"{sandbox_url}/run", json=body)
     response.raise_for_status()
     data = response.json()
+    if debug:
+        progress_log.info(
+            "codegen debug: sandbox response ok=%s in %.1fs error=%r result=%r",
+            data["ok"], time.monotonic() - started, (data["error"] or "")[:4000],
+            repr(data["result"])[:300],
+        )
     if not data["ok"]:
         raise SandboxRunError(data["error"] or "sandbox run failed")
     return data["result"]
@@ -124,11 +142,22 @@ def check_python_module(code: str, entrypoint: str) -> None:
         raise ValueError(f"module must define def {entrypoint}(...)")
 
 
+def scanned_page_numbers(page_texts: list[tuple[int, str]], image_counts: list[int]) -> list[int]:
+    # Truly empty pages (no text, no images) have nothing for OCR to read, so a
+    # scanned page is one with no text layer but at least one embedded image.
+    return [
+        number for (number, text), images in zip(page_texts, image_counts)
+        if not text.strip() and images > 0
+    ]
+
+
 def blank_page_samples(corpus_dir: str, max_files: int) -> list[tuple[str, bytes, int]]:
     samples = []
     for path in sorted(Path(corpus_dir).glob("*.pdf")):
         pdf_bytes = path.read_bytes()
-        blank = [n for n, text in extract_pages(pdf_bytes) if not text.strip()]
+        reader = PdfReader(BytesIO(pdf_bytes))
+        image_counts = [len(page.images) for page in reader.pages]
+        blank = scanned_page_numbers(extract_pages(pdf_bytes), image_counts)
         if blank:
             samples.append((path.name, pdf_bytes, blank[0]))
             if len(samples) >= max_files:
@@ -157,7 +186,7 @@ async def validate_ocr(ctx: CodegenContext, code: str) -> list[str]:
         try:
             text = await run_in_sandbox(
                 ctx.sandbox_url, code, OCR_TASK.entrypoint, ["input.pdf", page],
-                {"input.pdf": pdf_bytes}, timeout_s=120,
+                {"input.pdf": pdf_bytes}, timeout_s=120, debug=ctx.settings.codegen_debug,
             )
         except SandboxRunError as exc:
             problems.append(f"ocr_page raised on page {page}: {exc}")
@@ -201,10 +230,12 @@ async def validate_graph_labels(ctx: CodegenContext, labels) -> list[str]:
 VALIDATORS = {"ocr": validate_ocr, "graph_labels": validate_graph_labels}
 
 
-def _llm_cost(settings, response) -> float:
-    return (
-        (response.input_tokens or 0) / 1000 * settings.judge_cost_per_1k_in_usd
-        + (response.output_tokens or 0) / 1000 * settings.judge_cost_per_1k_out_usd
+def _codegen_cost(settings, response) -> float | None:
+    provider = settings.codegen_provider or settings.eval_judge_provider
+    model = settings.codegen_model or settings.eval_judge_model
+    return token_cost_usd(
+        provider, model, response.input_tokens or 0, response.output_tokens or 0,
+        settings.judge_cost_per_1k_in_usd, settings.judge_cost_per_1k_out_usd,
     )
 
 
@@ -213,9 +244,19 @@ async def _graph_corpus_context(ctx: CodegenContext) -> str:
     return "\n---\n".join(sample[:800] for sample in samples)
 
 
+def _log_usage(sweep_id: int, task_name: str, status: str, attempts: int, usage: dict) -> None:
+    total = usage["input_tokens"] + usage["output_tokens"]
+    progress_log.info(
+        "sweep %s: codegen %s %s after %d attempt(s): input_tokens=%d output_tokens=%d total_tokens=%d",
+        sweep_id, task_name, status, attempts, usage["input_tokens"], usage["output_tokens"], total,
+    )
+
+
 async def run_codegen_task(
     db, provider, ctx: CodegenContext, sweep_id: int, task: CodegenTask, budget: dict,
+    usage: dict | None = None,
 ) -> str:
+    usage = usage if usage is not None else {"input_tokens": 0, "output_tokens": 0}
     corpus_context = await _graph_corpus_context(ctx) if task.name == "graph_labels" else None
     feedback: str | None = None
     attempt = 0
@@ -223,6 +264,7 @@ async def run_codegen_task(
         spent = await db.sum_codegen_spend(sweep_id)
         if budget_exhausted(spent, budget):
             exhausted = [axis for axis, cap in budget.items() if spent.get(axis, 0) >= cap]
+            _log_usage(sweep_id, task.name, "failed", attempt, usage)
             raise CodegenFailed(
                 f"{task.name}: budget exhausted ({', '.join(exhausted)}) after {attempt} "
                 f"attempt(s). Last problem: {feedback or 'none'}"
@@ -233,7 +275,12 @@ async def run_codegen_task(
         cost = 0.0
         try:
             response = await provider.complete(build_prompt(task, corpus_context, feedback))
-            cost = _llm_cost(ctx.settings, response)
+            usage["input_tokens"] += response.input_tokens or 0
+            usage["output_tokens"] += response.output_tokens or 0
+            priced = _codegen_cost(ctx.settings, response)
+            cost = priced or 0.0
+            if ctx.settings.codegen_debug:
+                progress_log.info("codegen debug: %s raw LLM reply:\n%s", task.name, response.text[:3000])
             content = extract_block(task, response.text)
             if task.kind == "python":
                 check_python_module(content, task.entrypoint)
@@ -249,27 +296,41 @@ async def run_codegen_task(
         )
         if not problems:
             await db.upsert_generated_artifact(sweep_id, task.name, content)
+            progress_log.info("sweep %s: codegen %s accepted on attempt %d (%.1fs, cost %s)",
+                              sweep_id, task.name, attempt, duration_ms / 1000,
+                              f"${priced:.4f}" if priced is not None else "unpriced")
+            _log_usage(sweep_id, task.name, "succeeded", attempt, usage)
             return content
+        progress_log.info("sweep %s: codegen %s attempt %d failed validation: %s",
+                          sweep_id, task.name, attempt, "; ".join(problems))
         feedback = "\n".join(problems)
 
 
 async def run_codegen_tasks(
     db, provider, ctx: CodegenContext, sweep_id: int, task_names: list[str], budget: dict,
 ) -> None:
-    for name in task_names:
-        task = TASKS[name]
-        if task.name == "ocr" and not await asyncio.to_thread(
-            blank_page_samples, ctx.settings.corpus_dir, 1,
-        ):
-            continue
-        await run_codegen_task(db, provider, ctx, sweep_id, task, budget)
+    usage = {"input_tokens": 0, "output_tokens": 0}
+    try:
+        for name in task_names:
+            task = TASKS[name]
+            if task.name == "ocr" and not await asyncio.to_thread(
+                blank_page_samples, ctx.settings.corpus_dir, 1,
+            ):
+                continue
+            await run_codegen_task(db, provider, ctx, sweep_id, task, budget, usage)
+    finally:
+        progress_log.info(
+            "sweep %s: codegen total tokens input_tokens=%d output_tokens=%d total_tokens=%d",
+            sweep_id, usage["input_tokens"], usage["output_tokens"],
+            usage["input_tokens"] + usage["output_tokens"],
+        )
 
 
-def make_ocr_page(sandbox_url: str, code: str):
+def make_ocr_page(sandbox_url: str, code: str, debug: bool = False):
     async def ocr_page(pdf_bytes: bytes, page_number: int) -> str:
         return await run_in_sandbox(
             sandbox_url, code, OCR_TASK.entrypoint, ["input.pdf", page_number],
-            {"input.pdf": pdf_bytes}, timeout_s=120,
+            {"input.pdf": pdf_bytes}, timeout_s=120, debug=debug,
         )
 
     return ocr_page

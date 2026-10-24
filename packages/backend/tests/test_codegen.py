@@ -55,6 +55,8 @@ def _ctx(ner=None):
     return CodegenContext(
         settings=SimpleNamespace(
             corpus_dir="unused", judge_cost_per_1k_in_usd=0.0, judge_cost_per_1k_out_usd=0.0,
+            codegen_debug=False, codegen_provider=None, codegen_model=None,
+            eval_judge_provider="openai", eval_judge_model="gpt-6-luna",
         ),
         ner=ner,
         sandbox_url="http://sandbox.test",
@@ -75,6 +77,12 @@ def test_extract_block_rejects_missing_fence():
         extract_block(OCR_TASK, "no code here")
 
 
+def test_scanned_page_numbers_skips_truly_empty_pages():
+    page_texts = [(1, ""), (2, "   "), (3, ""), (4, "has text")]
+    image_counts = [1, 0, 0, 1]
+    assert codegen.scanned_page_numbers(page_texts, image_counts) == [1]
+
+
 def test_check_python_module_requires_entrypoint():
     with pytest.raises(ValueError, match="ocr_page"):
         check_python_module("def other():\n    pass\n", "ocr_page")
@@ -84,7 +92,7 @@ def test_check_python_module_requires_entrypoint():
 async def test_ocr_task_passes_validation_and_stores_artifact(monkeypatch):
     monkeypatch.setattr(codegen, "blank_page_samples", lambda corpus_dir, n: [("a.pdf", b"%PDF", 3)])
 
-    async def fake_sandbox(url, code, entrypoint, args, files=None, timeout_s=60):
+    async def fake_sandbox(url, code, entrypoint, args, files=None, timeout_s=60, debug=False):
         assert entrypoint == "ocr_page" and args == ["input.pdf", 3]
         return "Fraud report text here"
 
@@ -104,7 +112,7 @@ async def test_failed_validation_is_fed_back_to_the_next_attempt(monkeypatch):
     monkeypatch.setattr(codegen, "blank_page_samples", lambda corpus_dir, n: [("a.pdf", b"%PDF", 1)])
     replies = iter(["", "Fraud report text here"])
 
-    async def fake_sandbox(url, code, entrypoint, args, files=None, timeout_s=60):
+    async def fake_sandbox(url, code, entrypoint, args, files=None, timeout_s=60, debug=False):
         return next(replies)
 
     monkeypatch.setattr(codegen, "run_in_sandbox", fake_sandbox)
@@ -121,7 +129,7 @@ async def test_failed_validation_is_fed_back_to_the_next_attempt(monkeypatch):
 async def test_budget_exhaustion_raises_codegen_failed(monkeypatch):
     monkeypatch.setattr(codegen, "blank_page_samples", lambda corpus_dir, n: [("a.pdf", b"%PDF", 1)])
 
-    async def always_empty(url, code, entrypoint, args, files=None, timeout_s=60):
+    async def always_empty(url, code, entrypoint, args, files=None, timeout_s=60, debug=False):
         return ""
 
     monkeypatch.setattr(codegen, "run_in_sandbox", always_empty)
