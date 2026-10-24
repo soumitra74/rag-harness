@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.services.graph_backfill import backfill_graph_for_config
+from app.services.graph_backfill import backfill_graph_for_config, rebuild_cooccurrences_for_config
 
 router = APIRouter()
 
@@ -22,6 +22,17 @@ async def backfill_graph(request: Request, body: BackfillRequest):
         raise HTTPException(status_code=400, detail=f"Unknown config_id: {body.config_id}")
 
     return await backfill_graph_for_config(db, ner, config)
+
+
+@router.post("/api/graph/rebuild-cooccurrences")
+async def rebuild_cooccurrences(request: Request, body: BackfillRequest):
+    db = request.app.state.db
+
+    config = await db.get_experiment_config(body.config_id)
+    if config is None:
+        raise HTTPException(status_code=400, detail=f"Unknown config_id: {body.config_id}")
+
+    return await rebuild_cooccurrences_for_config(db, config)
 
 
 @router.get("/api/graph/entities")

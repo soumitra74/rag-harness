@@ -14,6 +14,17 @@ async def _iter_all_chunks(db, config_id: int, dim: int, document_id: str):
         page += 1
 
 
+async def rebuild_cooccurrences_for_config(db, config) -> dict:
+    await db.fill_mention_documents(config.id, config.embedding_dim)
+    documents = await db.list_chunk_documents(config.id, config.embedding_dim)
+    cooccurrences_created = 0
+    for doc in documents:
+        cooccurrences_created += await db.derive_cooccurrence_edges(
+            config.id, config.embedding_dim, str(doc["document_id"])
+        )
+    return {"documents": len(documents), "cooccurrences_created": cooccurrences_created}
+
+
 async def backfill_graph_for_config(db, ner, config) -> dict:
     documents = await db.list_chunk_documents(config.id, config.embedding_dim)
     chunks_processed = 0

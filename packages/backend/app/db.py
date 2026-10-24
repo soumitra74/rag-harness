@@ -323,7 +323,8 @@ class Database:
             #                   (unordered pair, canonicalized so
             #                   source_id < target_id -- see derive_cooccurrence_edges)
             #                   chunk_id = chunk the pair was found in,
-            #                   char_start/char_end = span covering both mentions
+            #                   char_start/char_end = source entity's span,
+            #                   target_char_start/target_char_end = target entity's span
             # Every edge carries document_id (documents are the top-level node).
             # config_id is required for MENTIONS (chunk_id is only unique
             # within a config's own chunks_dim_N table).
@@ -339,6 +340,8 @@ class Database:
                     chunk_id     UUID,
                     char_start   INT,
                     char_end     INT,
+                    target_char_start INT,
+                    target_char_end   INT,
                     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
                     CONSTRAINT graph_edges_shape CHECK (
                         (edge_type = 'MENTIONS' AND config_id IS NOT NULL AND document_id IS NOT NULL)
@@ -350,6 +353,8 @@ class Database:
                 """
             )
             await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS chunk_id UUID")
+            await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS target_char_start INT")
+            await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS target_char_end INT")
             # Co-occurrence rows written before chunk provenance have no evidence; they are derived and rebuilt by backfill.
             await conn.execute(
                 "DELETE FROM graph_edges WHERE edge_type = 'CO_OCCURS_WITH' AND chunk_id IS NULL"
@@ -1156,24 +1161,41 @@ class Database:
                 char_end,
             )
 
+    async def fill_mention_documents(self, config_id: int, dim: int) -> int:
+        table = f"chunks_dim_{int(dim)}"
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                f"""
+                UPDATE graph_edges e SET document_id = c.document_id
+                FROM {table} c
+                WHERE e.edge_type = 'MENTIONS' AND e.config_id = $1
+                  AND e.document_id IS NULL AND e.source_id = c.id
+                """,
+                config_id,
+            )
+            return int(result.split()[-1])
+
     async def derive_cooccurrence_edges(self, config_id: int, dim: int, document_id: str) -> int:
         """Links every pair of distinct entities mentioned in the same chunk of
-        this document, under this config. The edge's span covers both mentions
-        so it can be shown as evidence. Call once per document after all its
-        chunks' mentions have been inserted."""
+        this document, under this config. Each edge keeps both entities' mention
+        offsets within that chunk. Call once per document after all its chunks'
+        mentions have been inserted."""
         table = f"chunks_dim_{int(dim)}"
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 INSERT INTO graph_edges
-                    (edge_type, source_id, target_id, document_id, chunk_id, char_start, char_end)
+                    (edge_type, source_id, target_id, document_id, chunk_id,
+                     char_start, char_end, target_char_start, target_char_end)
                 SELECT 'CO_OCCURS_WITH',
                        e1.target_id,
                        e2.target_id,
                        $2::uuid,
                        e1.source_id,
-                       LEAST(e1.char_start, e2.char_start),
-                       GREATEST(e1.char_end, e2.char_end)
+                       e1.char_start,
+                       e1.char_end,
+                       e2.char_start,
+                       e2.char_end
                 FROM graph_edges e1
                 JOIN graph_edges e2
                   ON e2.source_id = e1.source_id
@@ -1296,7 +1318,8 @@ class Database:
                 f"""
                 SELECT ea.entity_type AS entity_type_a, ea.entity_text AS entity_text_a,
                        eb.entity_type AS entity_type_b, eb.entity_text AS entity_text_b,
-                       e.chunk_id, e.char_start, e.char_end
+                       e.chunk_id, e.char_start, e.char_end,
+                       e.target_char_start, e.target_char_end
                 FROM graph_edges e
                 JOIN graph_entities ea ON ea.id = e.source_id
                 JOIN graph_entities eb ON eb.id = e.target_id
