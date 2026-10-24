@@ -1,0 +1,7 @@
+{
+  "hit_rate": 0.2,
+  "mean_mrr": 0.2,
+  "mean_correctness": 0.3,
+  "mean_faithfulness": 0.15,
+  "mean_info_recall": 0.15
+}

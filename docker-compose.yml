@@ -26,6 +26,8 @@ services:
       - no-new-privileges:true
     mem_limit: 1g
     pids_limit: 256
+    environment:
+      CODEGEN_DEBUG: ${CODEGEN_DEBUG:-false}
     networks:
       - sandbox
 
@@ -34,6 +36,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-fraudrag}:${POSTGRES_PASSWORD:-fraudragpass}@postgres:5432/${POSTGRES_DB:-fraudragdb}
+      RCA_READONLY_DATABASE_URL: postgresql://rca_readonly:rcareadonly@postgres:5432/${POSTGRES_DB:-fraudragdb}
       OLLAMA_BASE_URL: http://host.docker.internal:11444
       CODEGEN_SANDBOX_URL: http://codegen-sandbox:8000
     networks:
@@ -43,6 +46,7 @@ services:
       - "${BACKEND_HOST_PORT:-8089}:8000"
     volumes:
       - ./corpus:/app/corpus:ro
+      - ./eval:/app/eval
       - fraud_logs:/app/logs
       - ./backups:/app/backups
     depends_on:

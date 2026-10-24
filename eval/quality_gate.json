@@ -1,0 +1,11 @@
+{
+  "hit_rate": 0.8,
+  "mean_mrr": 0.6,
+  "mean_citation_accuracy": 0.3,
+  "mean_citation_recall": 0.6,
+  "mean_correctness": 0.7,
+  "mean_faithfulness": 0.8,
+  "mean_answer_relevance": 0.7,
+  "mean_info_recall": 0.7,
+  "mean_citation_completeness": 0.6
+}
