@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.services.codegen import ARTIFACT_FILES
+
 
 @dataclass
 class ResetCategory:
@@ -36,6 +38,9 @@ RESET_CATEGORIES: dict[str, ResetCategory] = {
     ),
     "rca_sessions": ResetCategory(
         tables=["rca_sessions", "rca_messages"], requires=[],
+    ),
+    "generated_code": ResetCategory(
+        tables=["generated_artifacts"], requires=[],
     ),
 }
 
@@ -105,6 +110,16 @@ async def backup_before_reset(
     if exit_code != 0:
         raise BackupFailedError(f"pg_dump exited with code {exit_code}; reset aborted")
     return backup_path
+
+
+def remove_generated_files(generated_dir: str) -> list[str]:
+    removed = []
+    for filename in ARTIFACT_FILES.values():
+        path = Path(generated_dir) / filename
+        if path.is_file():
+            path.unlink()
+            removed.append(filename)
+    return removed
 
 
 async def execute_reset(db, categories: set[str]) -> None:

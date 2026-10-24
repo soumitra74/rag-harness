@@ -7,6 +7,7 @@ from app.services.reset_db import (
     backup_before_reset,
     execute_reset,
     preview_reset,
+    remove_generated_files,
     resolve_categories,
 )
 
@@ -53,4 +54,9 @@ async def reset_execute(request: Request, body: ResetExecuteRequest):
     except (BackupFailedError, ResetBlockedError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    return {"categories": sorted(categories), "backup_path": backup_path}
+    removed_files = remove_generated_files(settings.generated_dir) if "generated_code" in categories else []
+    return {
+        "categories": sorted(categories),
+        "backup_path": backup_path,
+        "removed_generated_files": removed_files,
+    }

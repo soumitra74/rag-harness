@@ -14,6 +14,7 @@ const CATEGORIES: Category[] = [
   { id: "golden_qa", label: "Golden QA dataset", requires: [] },
   { id: "eval_history", label: "Eval history", requires: [] },
   { id: "rca_sessions", label: "RCA sessions", requires: [] },
+  { id: "generated_code", label: "Generated code (DB records + generated/ files)", requires: [] },
 ];
 
 const REQUIRED_PHRASE = "RESET";

@@ -174,3 +174,29 @@ async def test_execute_reset_raises_reset_blocked_error_on_fk_violation():
 
     with pytest.raises(ResetBlockedError):
         await execute_reset(db, {"eval_history"})
+
+
+def test_resolve_categories_generated_code_has_no_dependencies():
+    assert resolve_categories(["generated_code"]) == {"generated_code"}
+
+
+@pytest.mark.asyncio
+async def test_execute_reset_generated_code_truncates_generated_artifacts():
+    db = FakeExecuteDatabase(chunk_tables=[])
+
+    await execute_reset(db, {"generated_code"})
+
+    _, groups = db.reset_tables_calls[-1]
+    assert groups == [["generated_artifacts"]]
+
+
+def test_remove_generated_files_deletes_only_artifact_files(tmp_path):
+    from app.services.reset_db import remove_generated_files
+
+    (tmp_path / "ocr.py").write_text("x", encoding="utf-8")
+    (tmp_path / "graph_labels.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "keep.txt").write_text("y", encoding="utf-8")
+
+    assert sorted(remove_generated_files(str(tmp_path))) == ["graph_labels.json", "ocr.py"]
+    assert (tmp_path / "keep.txt").exists()
+    assert remove_generated_files(str(tmp_path)) == []
