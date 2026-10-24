@@ -25,7 +25,7 @@ async def backfill_graph_for_config(db, ner, config) -> dict:
         document_id = str(doc["document_id"])
         async for chunk in _iter_all_chunks(db, config.id, config.embedding_dim, document_id):
             chunks_processed += 1
-            extracted = await ner.extract(chunk["chunk_text"])
+            extracted = await ner.extract_windowed(chunk["chunk_text"])
             for entity in extracted:
                 entity_id = await db.insert_entity(entity.entity_type, entity.normalized_text)
                 entities_touched.add(entity_id)

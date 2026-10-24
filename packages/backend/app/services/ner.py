@@ -1,7 +1,9 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from gliner import GLiNER
+
+from app.services.ner_windows import ner_windows
 
 MODEL_NAME = "urchade/gliner_base"
 ENTITY_LABELS = ["REPORT_NUMBER", "DATA_COUNTER_ID", "REPORT_DATE", "AIRCRAFT_TYPE"]
@@ -51,6 +53,26 @@ class NERService:
 
     async def extract(self, text: str, labels: list[str] | None = None) -> list[ExtractedEntity]:
         return await asyncio.to_thread(self._predict, text, labels or self.labels)
+
+    def _count_tokens(self, text: str) -> int:
+        tokenizer = self._get_model().data_processor.transformer_tokenizer
+        return len(tokenizer.encode(text, add_special_tokens=False))
+
+    async def extract_windowed(self, text: str, labels: list[str] | None = None) -> list[ExtractedEntity]:
+        # Long chunks exceed GLiNER's 384-token input and would lose their tail,
+        # so NER runs on overlapping windows and offsets map back to the chunk.
+        seen: set[tuple[str, int, int]] = set()
+        merged: list[ExtractedEntity] = []
+        for window_start, window_end in ner_windows(text, self._count_tokens):
+            for entity in await self.extract(text[window_start:window_end], labels):
+                start = entity.char_start + window_start
+                end = entity.char_end + window_start
+                key = (entity.entity_type, start, end)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(replace(entity, char_start=start, char_end=end))
+        return merged
 
     async def warm_up(self) -> None:
         """Force model load at a known point (container startup) instead of

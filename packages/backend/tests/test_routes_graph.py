@@ -16,6 +16,9 @@ class FakeNER:
     async def extract(self, text):
         return self._results_by_text.get(text, [])
 
+    async def extract_windowed(self, text):
+        return await self.extract(text)
+
 
 class FakeExtractedEntity:
     def __init__(self, entity_type, normalized_text, char_start=0, char_end=0):
