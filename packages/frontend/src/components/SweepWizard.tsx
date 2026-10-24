@@ -11,11 +11,12 @@ type WizardPage = 1 | 2 | 3 | 4 | 5 | 6;
 interface SweepWizardProps {
   onExit: () => void;
   onExitToEvalHistory: () => void;
+  initialSweepId?: number;
 }
 
-export function SweepWizard({ onExit, onExitToEvalHistory }: SweepWizardProps) {
-  const [page, setPage] = useState<WizardPage>(1);
-  const [sweepId, setSweepId] = useState<number | null>(null);
+export function SweepWizard({ onExit, onExitToEvalHistory, initialSweepId }: SweepWizardProps) {
+  const [page, setPage] = useState<WizardPage>(initialSweepId !== undefined ? 4 : 1);
+  const [sweepId, setSweepId] = useState<number | null>(initialSweepId ?? null);
 
   return (
     <div className="sweep-wizard">

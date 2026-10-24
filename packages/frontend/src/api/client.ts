@@ -705,6 +705,20 @@ export async function approveSweep(sweepId: number): Promise<{ status: string }>
   return res.json();
 }
 
+export interface LatestSweep {
+  sweep_id: number;
+  status: string;
+  resumable: boolean;
+}
+
+export async function getLatestSweep(): Promise<LatestSweep | null> {
+  const res = await fetch(`${API_BASE_URL}/api/sweep/latest`);
+  if (!res.ok) {
+    throw new Error(await parseErrorDetail(res, `Failed to get latest sweep (${res.status})`));
+  }
+  return res.json();
+}
+
 export async function resumeSweep(sweepId: number): Promise<{ status: string }> {
   const res = await fetch(`${API_BASE_URL}/api/sweep/${sweepId}/resume`, { method: "POST" });
   if (!res.ok) {

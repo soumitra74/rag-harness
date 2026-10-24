@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import "./App.css";
+import { getLatestSweep, type LatestSweep } from "./api/client";
 import { ChunksPanel } from "./components/ChunksPanel";
 import { CorpusLibrary } from "./components/CorpusLibrary";
 import { EvalComparePanel } from "./components/EvalComparePanel";
@@ -49,6 +50,13 @@ function App() {
   const [backendStatus, setBackendStatus] = useState("checking...");
   const [activeTab, setActiveTab] = useState<TabId>(getStoredTab);
   const [viewMode, setViewMode] = useState<"tabs" | "wizard">("tabs");
+  const [latestSweep, setLatestSweep] = useState<LatestSweep | null>(null);
+  const [resumeSweepId, setResumeSweepId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (viewMode !== "tabs") return;
+    getLatestSweep().then(setLatestSweep).catch(() => setLatestSweep(null));
+  }, [viewMode]);
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/api/health`)
@@ -73,14 +81,31 @@ function App() {
           <p>Backend status: {backendStatus}</p>
         </div>
         {viewMode === "tabs" && (
-          <button className="optimize-cta" onClick={() => setViewMode("wizard")}>
-            Optimize RAG
-          </button>
+          <div className="app-header-actions">
+            {latestSweep?.resumable && (
+              <button
+                className="optimize-cta"
+                onClick={() => {
+                  setResumeSweepId(latestSweep.sweep_id);
+                  setViewMode("wizard");
+                }}
+              >
+                Resume Sweep
+              </button>
+            )}
+            <button className="optimize-cta" onClick={() => setViewMode("wizard")}>
+              Optimize RAG
+            </button>
+          </div>
         )}
       </div>
       {viewMode === "wizard" ? (
         <SweepWizard
-          onExit={() => setViewMode("tabs")}
+          initialSweepId={resumeSweepId ?? undefined}
+          onExit={() => {
+            setResumeSweepId(null);
+            setViewMode("tabs");
+          }}
           onExitToEvalHistory={() => {
             setActiveTab("eval-history");
             setViewMode("tabs");

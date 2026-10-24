@@ -889,6 +889,17 @@ class Database:
             item["evaluated_combos"] = json.loads(item["evaluated_combos"])
             return item
 
+    async def get_latest_sweep_summary(self) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT s.id, s.status,
+                       (SELECT COUNT(*) FROM sweep_configs sc WHERE sc.sweep_id = s.id) AS config_count
+                FROM sweeps s ORDER BY s.id DESC LIMIT 1
+                """
+            )
+            return dict(row) if row else None
+
     async def get_sweep(self, sweep_id: int) -> dict | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM sweeps WHERE id = $1", sweep_id)

@@ -137,6 +137,20 @@ async def start_sweep(request: Request, body: StartSweepRequest):
     return {"sweep_id": sweep_id, "status": "bootstrapping"}
 
 
+@router.get("/api/sweep/latest")
+async def get_latest_sweep(request: Request):
+    # Resumable only once bootstrap has saved configs: resume runs the eval loop
+    # over saved configs, so a sweep paused during bootstrap would never finish.
+    latest = await request.app.state.db.get_latest_sweep_summary()
+    if latest is None:
+        return None
+    return {
+        "sweep_id": latest["id"],
+        "status": latest["status"],
+        "resumable": latest["status"] == "paused" and latest["config_count"] > 0,
+    }
+
+
 @router.get("/api/sweep/{sweep_id}")
 async def get_sweep(request: Request, sweep_id: int):
     db = request.app.state.db

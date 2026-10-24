@@ -231,3 +231,29 @@ async def test_run_sweep_task_leaves_status_alone_on_success():
 
     sweep = await db.get_sweep(sweep_id)
     assert sweep["status"] == "running"
+
+
+@pytest.mark.parametrize(
+    "status, config_count, resumable",
+    [("paused", 2, True), ("paused", 0, False), ("running", 2, False), ("cancelled", 2, False)],
+)
+def test_latest_sweep_resumable_only_when_paused_with_saved_configs(monkeypatch, status, config_count, resumable):
+    class LatestDb(FakeDatabase):
+        async def get_latest_sweep_summary(self):
+            return {"id": 7, "status": status, "config_count": config_count}
+
+    client = _client(monkeypatch, LatestDb())
+
+    response = client.get("/api/sweep/latest")
+
+    assert response.json() == {"sweep_id": 7, "status": status, "resumable": resumable}
+
+
+def test_latest_sweep_returns_null_when_no_sweeps(monkeypatch):
+    class EmptyDb(FakeDatabase):
+        async def get_latest_sweep_summary(self):
+            return None
+
+    client = _client(monkeypatch, EmptyDb())
+
+    assert client.get("/api/sweep/latest").json() is None
