@@ -1,4 +1,5 @@
 import importlib.util
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -56,6 +57,7 @@ def _ctx(ner=None):
         settings=SimpleNamespace(
             corpus_dir="unused", judge_cost_per_1k_in_usd=0.0, judge_cost_per_1k_out_usd=0.0,
             codegen_debug=False, codegen_provider=None, codegen_model=None,
+            generated_dir=str(Path(tempfile.gettempdir()) / "codegen-tests"),
             eval_judge_provider="openai", eval_judge_model="gpt-6-luna",
         ),
         ner=ner,
@@ -250,7 +252,8 @@ async def test_codegen_failure_stops_bootstrap_before_ingestion(monkeypatch):
     db = BootstrapDb()
 
     await sweep.run_bootstrap(
-        db, object(), SimpleNamespace(labels=[]), SimpleNamespace(corpus_dir="unused", codegen_sandbox_url="http://sandbox.test"), 1, False,
+        db, object(), SimpleNamespace(labels=[]),
+        SimpleNamespace(corpus_dir="unused", codegen_sandbox_url="http://sandbox.test"), 1, False,
         codegen_tasks=["ocr"], codegen_budget=_budget(),
     )
 

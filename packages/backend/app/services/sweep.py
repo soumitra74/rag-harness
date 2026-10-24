@@ -10,6 +10,7 @@ from app.services.codegen import (
     CodegenContext,
     CodegenFailed,
     apply_graph_labels,
+    load_artifact_files,
     make_ocr_page,
     run_codegen_tasks,
 )
@@ -132,6 +133,11 @@ async def run_bootstrap(
             await run_codegen_tasks(
                 db, codegen_provider or provider, ctx, sweep_id, codegen_tasks, codegen_budget,
             )
+        else:
+            reused = load_artifact_files(settings.generated_dir)
+            for task, content in reused.items():
+                await db.upsert_generated_artifact(sweep_id, task, content)
+            progress_log.info("sweep %s: reused generated code: %s", sweep_id, sorted(reused) or "none")
         await _ensure_golden_qa(provider, settings, generate_golden_qa_flag)
         await db.set_corpus_snapshot(sweep_id, list_pdf_filenames(settings.corpus_dir))
         progress_log.info("sweep %s: %d candidate config(s) proposed", sweep_id, len(candidates))

@@ -93,7 +93,8 @@ async def test_run_bootstrap_happy_path_creates_sweep_configs_and_approves(tmp_p
         {"id": "q1", "question": "q", "reference_answer": "a",
          "golden_pages": [], "query_type": "extractive"}
     ]))
-    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(dataset_path))
+    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(dataset_path),
+                        generated_dir=str(tmp_path / "generated"))
 
     async def fake_inspect_corpus(provider, corpus_dir_arg):
         return CANDIDATES
@@ -116,7 +117,8 @@ async def test_run_bootstrap_fails_on_corpus_inspection_error_with_no_partial_ro
 ):
     corpus_dir = tmp_path / "corpus"
     corpus_dir.mkdir()
-    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(tmp_path / "missing.json"))
+    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(tmp_path / "missing.json"),
+                        generated_dir=str(tmp_path / "generated"))
 
     async def failing_inspect_corpus(provider, corpus_dir_arg):
         raise CorpusInspectionError("no files")
@@ -141,7 +143,8 @@ async def test_run_bootstrap_fails_on_malformed_existing_golden_qa_file(tmp_path
     (corpus_dir / "doc1.pdf").write_bytes(b"not a real pdf")
     dataset_path = tmp_path / "golden_qa.json"
     dataset_path.write_text(json.dumps([{"id": "q1", "question": "q"}]))  # missing required keys
-    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(dataset_path))
+    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(dataset_path),
+                        generated_dir=str(tmp_path / "generated"))
 
     async def fake_inspect_corpus(provider, corpus_dir_arg):
         return CANDIDATES
@@ -168,7 +171,8 @@ async def test_run_bootstrap_checks_empty_corpus_before_generating_golden_qa(
     persist it, before the clear empty-corpus error ever fired."""
     corpus_dir = tmp_path / "corpus"
     corpus_dir.mkdir()  # no PDFs
-    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(tmp_path / "missing.json"))
+    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(tmp_path / "missing.json"),
+                        generated_dir=str(tmp_path / "generated"))
 
     generate_golden_qa_calls = []
 

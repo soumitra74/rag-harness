@@ -244,6 +244,24 @@ async def _graph_corpus_context(ctx: CodegenContext) -> str:
     return "\n---\n".join(sample[:800] for sample in samples)
 
 
+ARTIFACT_FILES = {"ocr": "ocr.py", "graph_labels": "graph_labels.json"}
+
+
+def save_artifact_file(generated_dir: str, task_name: str, content: str) -> None:
+    directory = Path(generated_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / ARTIFACT_FILES[task_name]).write_text(content, encoding="utf-8")
+
+
+def load_artifact_files(generated_dir: str) -> dict[str, str]:
+    directory = Path(generated_dir)
+    return {
+        task: (directory / filename).read_text(encoding="utf-8")
+        for task, filename in ARTIFACT_FILES.items()
+        if (directory / filename).is_file()
+    }
+
+
 def _log_usage(sweep_id: int, task_name: str, status: str, attempts: int, usage: dict) -> None:
     total = usage["input_tokens"] + usage["output_tokens"]
     progress_log.info(
@@ -296,6 +314,7 @@ async def run_codegen_task(
         )
         if not problems:
             await db.upsert_generated_artifact(sweep_id, task.name, content)
+            save_artifact_file(ctx.settings.generated_dir, task.name, content)
             progress_log.info("sweep %s: codegen %s accepted on attempt %d (%.1fs, cost %s)",
                               sweep_id, task.name, attempt, duration_ms / 1000,
                               f"${priced:.4f}" if priced is not None else "unpriced")

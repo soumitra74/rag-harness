@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     codegen_sandbox_url: str = "http://codegen-sandbox:8000"
     codegen_debug: bool = False
 
+    # Accepted codegen output is written here (committed to the repo) and reused
+    # by sweeps that don't run codegen. Mounted read-write in docker-compose.yml.
+    generated_dir: str = "generated"
+
     # Judge LLM for scoring eval-cycle answers. Deliberately a different
     # model than the config's own chat_provider to avoid self-preference
     # bias. docker-compose mounts eval/golden_qa.json at eval_dataset_path

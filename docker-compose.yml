@@ -47,6 +47,7 @@ services:
     volumes:
       - ./corpus:/app/corpus:ro
       - ./eval:/app/eval
+      - ./packages/backend/generated:/app/generated
       - fraud_logs:/app/logs
       - ./backups:/app/backups
     depends_on:

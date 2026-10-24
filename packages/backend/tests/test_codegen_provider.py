@@ -57,3 +57,16 @@ def test_anthropic_models_are_priced():
 
     assert token_cost_usd("anthropic", "claude-haiku-5-5", 1_000_000, 1_000_000) == 0.60
     assert token_cost_usd("anthropic", "claude-sonnet-5", 1_000_000, 1_000_000) == 12.00
+
+
+def test_artifact_files_round_trip(tmp_path):
+    from app.services.codegen import load_artifact_files, save_artifact_file
+
+    save_artifact_file(str(tmp_path), "ocr", "def ocr_page(p, n):\n    return ''\n")
+    save_artifact_file(str(tmp_path), "graph_labels", '["PERSON", "ORGANIZATION", "METRIC"]')
+
+    assert load_artifact_files(str(tmp_path)) == {
+        "ocr": "def ocr_page(p, n):\n    return ''\n",
+        "graph_labels": '["PERSON", "ORGANIZATION", "METRIC"]',
+    }
+    assert load_artifact_files(str(tmp_path / "missing")) == {}
