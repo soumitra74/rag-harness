@@ -10,3 +10,5 @@ corpus/*
 !corpus/.gitkeep
 backups/
 logs/
+packages/backend/generated/
+golden_qa.json
