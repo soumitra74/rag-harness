@@ -54,6 +54,15 @@ services:
       postgres:
         condition: service_healthy
 
+  frontend:
+    build: ./packages/frontend
+    ports:
+      - "${FRONTEND_HOST_PORT:-5183}:5173"
+    volumes:
+      - ./packages/frontend/src:/app/src
+    depends_on:
+      - backend
+
 networks:
   # Internal: no route to the internet. Generated code runs only here.
   sandbox:
