@@ -16,13 +16,16 @@ class FakeDatabase(CodegenFakeMethods):
         self._sweep_configs = {}
         self._next_id = 1
 
-    async def create_sweep(self, ingestion_budget, eval_budget, codegen_budget=None):
+    async def create_sweep(self, ingestion_budget, eval_budget, codegen_budget=None,
+                           bootstrap_options=None):
         sweep_id = self._next_id
         self._next_id += 1
         self._sweeps[sweep_id] = {
             "id": sweep_id, "status": "bootstrapping", "ingestion_budget": ingestion_budget,
             "eval_budget": eval_budget, "best_config_id": None, "best_score": None,
             "summary_markdown": None, "error_message": None, "corpus_snapshot": ["doc1.pdf"],
+            "codegen_budget": codegen_budget, "bootstrap_options": bootstrap_options,
+            "bootstrap_complete": True,
             "created_at": datetime.now(timezone.utc), "completed_at": None,
         }
         return sweep_id
@@ -234,19 +237,55 @@ async def test_run_sweep_task_leaves_status_alone_on_success():
 
 
 @pytest.mark.parametrize(
-    "status, config_count, resumable",
-    [("paused", 2, True), ("paused", 0, False), ("running", 2, False), ("cancelled", 2, False)],
+    "status, resumable",
+    [("paused", True), ("failed", True), ("running", False), ("cancelled", False)],
 )
-def test_latest_sweep_resumable_only_when_paused_with_saved_configs(monkeypatch, status, config_count, resumable):
+def test_latest_sweep_resumable_when_paused_or_failed(monkeypatch, status, resumable):
     class LatestDb(FakeDatabase):
         async def get_latest_sweep_summary(self):
-            return {"id": 7, "status": status, "config_count": config_count}
+            return {"id": 7, "status": status, "bootstrap_complete": False, "config_count": 0}
 
     client = _client(monkeypatch, LatestDb())
 
     response = client.get("/api/sweep/latest")
 
     assert response.json() == {"sweep_id": 7, "status": status, "resumable": resumable}
+
+
+def test_resume_failed_bootstrap_reruns_bootstrap_with_stored_options(monkeypatch):
+    calls = []
+
+    async def recording_bootstrap(db, provider, ner, settings, sweep_id, generate_golden_qa_flag,
+                                  codegen_tasks=None, codegen_budget=None, codegen_provider=None):
+        calls.append((sweep_id, generate_golden_qa_flag, codegen_tasks))
+
+    db = FakeDatabase()
+    client = _client(monkeypatch, db)
+    monkeypatch.setattr(routes_sweep, "run_bootstrap", recording_bootstrap)
+    monkeypatch.setattr(routes_sweep, "get_codegen_provider", lambda settings: object())
+    sweep_id = _insert_bootstrapping_sweep(db, bootstrap_options={"generate_golden_qa": True,
+                                                                  "codegen_tasks": ["ocr"]})
+    db._sweeps[sweep_id].update(status="failed", bootstrap_complete=False, error_message="boom")
+
+    response = client.post(f"/api/sweep/{sweep_id}/resume")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "bootstrapping"
+    assert db._sweeps[sweep_id]["status"] == "bootstrapping"
+    assert calls == [(sweep_id, True, ["ocr"])]
+
+
+def _insert_bootstrapping_sweep(db, bootstrap_options):
+    sweep_id = db._next_id
+    db._next_id += 1
+    db._sweeps[sweep_id] = {
+        "id": sweep_id, "status": "bootstrapping", "ingestion_budget": {}, "eval_budget": {},
+        "best_config_id": None, "best_score": None, "summary_markdown": None,
+        "error_message": None, "corpus_snapshot": None, "codegen_budget": None,
+        "bootstrap_options": bootstrap_options, "bootstrap_complete": False,
+        "created_at": datetime.now(timezone.utc), "completed_at": None,
+    }
+    return sweep_id
 
 
 def test_latest_sweep_returns_null_when_no_sweeps(monkeypatch):

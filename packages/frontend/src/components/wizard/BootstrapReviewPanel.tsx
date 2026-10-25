@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { approveSweep, getSweep, type Sweep } from "../../api/client";
+import { approveSweep, getSweep, resumeSweep, type Sweep } from "../../api/client";
 
 const POLL_INTERVAL_MS = 2000;
 
 interface BootstrapReviewPanelProps {
   sweepId: number;
   onApproved: () => void;
+  onRetry: () => void;
 }
 
-export function BootstrapReviewPanel({ sweepId, onApproved }: BootstrapReviewPanelProps) {
+export function BootstrapReviewPanel({ sweepId, onApproved, onRetry }: BootstrapReviewPanelProps) {
   const [sweep, setSweep] = useState<Sweep | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = useCallback(() => {
@@ -65,7 +67,26 @@ export function BootstrapReviewPanel({ sweepId, onApproved }: BootstrapReviewPan
     return <p>Inspecting corpus and preparing candidate configs...</p>;
   }
   if (sweep.status === "failed") {
-    return <p className="error">Bootstrap failed: {sweep.error_message}</p>;
+    return (
+      <div>
+        <p className="error">Bootstrap failed: {sweep.error_message}</p>
+        <button
+          onClick={async () => {
+            setRetrying(true);
+            try {
+              await resumeSweep(sweepId);
+              onRetry();
+            } catch (err) {
+              setError(err instanceof Error ? err.message : String(err));
+              setRetrying(false);
+            }
+          }}
+          disabled={retrying}
+        >
+          {retrying ? "Retrying..." : "Retry bootstrap"}
+        </button>
+      </div>
+    );
   }
 
   return (

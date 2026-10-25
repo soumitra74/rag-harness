@@ -101,18 +101,22 @@ async def _ingest_and_backfill_config(db, ner, settings, config, sweep_id: int |
         await backfill_graph_for_config(db, ner, config)
 
 
-async def _create_and_ingest_candidate(db, ner, settings, candidate, sweep_id: int | None):
-    embedding_dim = get_embedding_dim(candidate.embedding_provider, candidate.embedding_model)
-    config = await db.create_experiment_config(
-        chunking_strategy=candidate.chunking_strategy,
-        chunk_size=candidate.chunk_size,
-        chunk_overlap=candidate.chunk_overlap,
-        embedding_provider=candidate.embedding_provider,
-        embedding_model=candidate.embedding_model,
-        embedding_dim=embedding_dim,
-    )
-    await _ingest_and_backfill_config(db, ner, settings, config, sweep_id)
-    return config
+async def _save_candidates(db, sweep_id: int, candidates) -> None:
+    for candidate in candidates:
+        embedding_dim = get_embedding_dim(candidate.embedding_provider, candidate.embedding_model)
+        config = await db.get_or_create_experiment_config(
+            chunking_strategy=candidate.chunking_strategy,
+            chunk_size=candidate.chunk_size,
+            chunk_overlap=candidate.chunk_overlap,
+            embedding_provider=candidate.embedding_provider,
+            embedding_model=candidate.embedding_model,
+            embedding_dim=embedding_dim,
+        )
+        await db.create_sweep_config(sweep_id, config.id, candidate.rationale, "proposed", "bootstrap")
+
+
+def _bootstrap_rows(sweep_configs: list[dict]) -> list[dict]:
+    return [sc for sc in sweep_configs if sc["source"] == "bootstrap"]
 
 
 async def run_bootstrap(
@@ -123,20 +127,28 @@ async def run_bootstrap(
     progress_log.info("sweep %s: bootstrap started (codegen=%s, golden_qa=%s)",
                       sweep_id, codegen_tasks or "off", generate_golden_qa_flag)
     try:
-        # Corpus-emptiness must be checked before golden-QA generation: with
-        # the flag on, generating first would ask the LLM to hallucinate a
-        # golden QA set from an empty corpus and persist it, before the
-        # clear empty-corpus error from inspect_corpus ever fires (review
-        # finding I-2). inspect_corpus itself raises on empty, so simply
-        # calling it first is enough to gate both checks on the same signal.
-        with stage(sweep_id, "inspect_corpus"):
-            candidates = await inspect_corpus(provider, settings.corpus_dir)
+        # A restarted bootstrap reuses the candidates it already saved, so the
+        # corpus isn't re-inspected (an LLM call) and the candidate list can't drift.
+        saved = _bootstrap_rows(await db.list_sweep_configs(sweep_id))
+        candidates = []
+        if not saved:
+            # Corpus-emptiness must be checked before golden-QA generation: with
+            # the flag on, generating first would ask the LLM to hallucinate a
+            # golden QA set from an empty corpus and persist it, before the
+            # clear empty-corpus error from inspect_corpus ever fires (review
+            # finding I-2). inspect_corpus itself raises on empty, so simply
+            # calling it first is enough to gate both checks on the same signal.
+            with stage(sweep_id, "inspect_corpus"):
+                candidates = await inspect_corpus(provider, settings.corpus_dir)
         if codegen_tasks:
-            ctx = CodegenContext(settings=settings, ner=ner, sandbox_url=settings.codegen_sandbox_url)
-            with stage(sweep_id, "codegen", tasks=",".join(codegen_tasks)):
-                await run_codegen_tasks(
-                    db, codegen_provider or provider, ctx, sweep_id, codegen_tasks, codegen_budget,
-                )
+            done = await db.get_generated_artifacts(sweep_id)
+            pending_tasks = [task for task in codegen_tasks if task not in done]
+            if pending_tasks:
+                ctx = CodegenContext(settings=settings, ner=ner, sandbox_url=settings.codegen_sandbox_url)
+                with stage(sweep_id, "codegen", tasks=",".join(pending_tasks)):
+                    await run_codegen_tasks(
+                        db, codegen_provider or provider, ctx, sweep_id, pending_tasks, codegen_budget,
+                    )
         else:
             reused = load_artifact_files(settings.generated_dir)
             for task, content in reused.items():
@@ -145,27 +157,28 @@ async def run_bootstrap(
         with stage(sweep_id, "golden_qa", enabled=generate_golden_qa_flag):
             await _ensure_golden_qa(provider, settings, generate_golden_qa_flag)
         await db.set_corpus_snapshot(sweep_id, list_pdf_filenames(settings.corpus_dir))
-        progress_log.info("sweep %s: %d candidate config(s) proposed", sweep_id, len(candidates))
 
-        ingested = []
-        for index, candidate in enumerate(candidates, start=1):
+        if not saved:
+            await _save_candidates(db, sweep_id, candidates)
+            saved = _bootstrap_rows(await db.list_sweep_configs(sweep_id))
+        progress_log.info("sweep %s: %d candidate config(s) to ingest", sweep_id, len(saved))
+
+        for index, sweep_config in enumerate(saved, start=1):
+            if sweep_config["status"] != "proposed":
+                continue
+            config = await db.get_experiment_config(sweep_config["config_id"])
+            # Ingest and graph backfill are idempotent (ingest skips documents already
+            # chunked for this config; mention and co-occurrence inserts hit unique
+            # indexes), so a candidate interrupted mid-ingest can safely run again.
             with stage(
-                sweep_id, "candidate", index=f"{index}/{len(candidates)}",
-                strategy=candidate.chunking_strategy, chunk_size=candidate.chunk_size,
-                overlap=candidate.chunk_overlap,
+                sweep_id, "candidate", index=f"{index}/{len(saved)}",
+                strategy=config.chunking_strategy, chunk_size=config.chunk_size,
+                overlap=config.chunk_overlap,
             ):
-                config = await _create_and_ingest_candidate(db, ner, settings, candidate, sweep_id)
-            ingested.append((config, candidate.rationale))
+                await _ingest_and_backfill_config(db, ner, settings, config, sweep_id)
+            await db.update_sweep_config_status(sweep_config["id"], "ingested")
 
-        for config, rationale in ingested:
-            # "ingested", not "proposed" -- bootstrap already ingested and
-            # graph-backfilled this config above, so the loop (Task 13) must
-            # not redo backfill for it (ingest_pdf tolerates a repeat call,
-            # backfill_graph_for_config does not -- it would insert duplicate
-            # mentions rows).
-            await db.create_sweep_config(sweep_id, config.id, rationale, "ingested", "bootstrap")
-
-        await db.update_sweep_status(sweep_id, "awaiting_approval")
+        await db.finish_bootstrap(sweep_id)
         progress_log.info("sweep %s: bootstrap complete, awaiting approval", sweep_id)
     except (CorpusInspectionError, GoldenQAGenerationError, CodegenFailed) as exc:
         progress_log.error("sweep %s: bootstrap failed: %s", sweep_id, exc)

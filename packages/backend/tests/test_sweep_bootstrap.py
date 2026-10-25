@@ -26,28 +26,48 @@ class FakeProvider:
 
 class FakeDatabase(CodegenFakeMethods):
     def __init__(self):
-        self.created_configs = []
+        self.configs = {}
         self.sweep_configs = []
         self.status_updates = []
         self._next_config_id = 1
 
-    async def create_experiment_config(self, chunking_strategy, chunk_size, chunk_overlap,
-                                        embedding_provider, embedding_model, embedding_dim):
+    async def get_or_create_experiment_config(self, chunking_strategy, chunk_size, chunk_overlap,
+                                               embedding_provider, embedding_model, embedding_dim):
+        key = (chunking_strategy, chunk_size, chunk_overlap, embedding_provider, embedding_model,
+               embedding_dim)
+        for config in self.configs.values():
+            if (config.chunking_strategy, config.chunk_size, config.chunk_overlap,
+                    config.embedding_provider, config.embedding_model,
+                    config.embedding_dim) == key:
+                return config
         config = ExperimentConfig(
             id=self._next_config_id, chunking_strategy=chunking_strategy, chunk_size=chunk_size,
             chunk_overlap=chunk_overlap, embedding_provider=embedding_provider,
             embedding_model=embedding_model, embedding_dim=embedding_dim,
         )
         self._next_config_id += 1
-        self.created_configs.append(config)
+        self.configs[config.id] = config
         return config
 
+    async def get_experiment_config(self, config_id):
+        return self.configs[config_id]
+
     async def create_sweep_config(self, sweep_id, config_id, rationale, status, source):
-        self.sweep_configs.append(
-            {"sweep_id": sweep_id, "config_id": config_id, "rationale": rationale,
-             "status": status, "source": source}
-        )
-        return len(self.sweep_configs)
+        row = {"id": len(self.sweep_configs) + 1, "sweep_id": sweep_id, "config_id": config_id,
+               "rationale": rationale, "status": status, "source": source}
+        self.sweep_configs.append(row)
+        return row["id"]
+
+    async def list_sweep_configs(self, sweep_id):
+        return [dict(row) for row in self.sweep_configs if row["sweep_id"] == sweep_id]
+
+    async def update_sweep_config_status(self, sweep_config_id, status):
+        for row in self.sweep_configs:
+            if row["id"] == sweep_config_id:
+                row["status"] = status
+
+    async def finish_bootstrap(self, sweep_id):
+        self.status_updates.append((sweep_id, "awaiting_approval", None))
 
     async def update_sweep_status(self, sweep_id, status, error_message=None):
         self.status_updates.append((sweep_id, status, error_message))
@@ -159,6 +179,63 @@ async def test_run_bootstrap_fails_on_malformed_existing_golden_qa_file(tmp_path
     sweep_id, status, error_message = db.status_updates[0]
     assert status == "failed"
     assert "golden" in error_message.lower() or "required" in error_message.lower()
+
+
+TWO_CANDIDATES = CANDIDATES + [
+    CorpusConfigCandidate(
+        chunking_strategy="sliding_window", chunk_size=500, chunk_overlap=50,
+        embedding_provider="local", embedding_model="BAAI/bge-base-en-v1.5",
+        rationale="smaller chunks",
+    ),
+]
+
+
+@pytest.mark.asyncio
+async def test_run_bootstrap_restart_ingests_only_unfinished_candidates(tmp_path, monkeypatch):
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    (corpus_dir / "doc1.pdf").write_bytes(b"not a real pdf")
+    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(tmp_path / "missing.json"),
+                        generated_dir=str(tmp_path / "generated"))
+    backfilled = []
+
+    async def first_run_inspect(provider, corpus_dir_arg):
+        return TWO_CANDIDATES
+
+    async def fail_on_second_backfill(db, ner, config):
+        backfilled.append(config.id)
+        if len(backfilled) == 2:
+            raise RuntimeError("ner crashed")
+        return {}
+
+    _patch_collaborators(monkeypatch, first_run_inspect)
+    monkeypatch.setattr(sweep, "backfill_graph_for_config", fail_on_second_backfill)
+    db = FakeDatabase()
+
+    with pytest.raises(RuntimeError, match="ner crashed"):
+        await sweep.run_bootstrap(db, FakeProvider(), object(), settings, sweep_id=1,
+                                   generate_golden_qa_flag=False)
+
+    assert [row["status"] for row in db.sweep_configs] == ["ingested", "proposed"]
+
+    backfilled.clear()
+
+    async def backfill_ok(db_arg, ner, config):
+        backfilled.append(config.id)
+        return {}
+
+    async def inspect_must_not_rerun(provider, corpus_dir_arg):
+        raise AssertionError("restart must reuse saved candidates, not re-inspect")
+
+    monkeypatch.setattr(sweep, "backfill_graph_for_config", backfill_ok)
+    monkeypatch.setattr(sweep, "inspect_corpus", inspect_must_not_rerun)
+
+    await sweep.run_bootstrap(db, FakeProvider(), object(), settings, sweep_id=1,
+                               generate_golden_qa_flag=False)
+
+    assert backfilled == [db.sweep_configs[1]["config_id"]]
+    assert [row["status"] for row in db.sweep_configs] == ["ingested", "ingested"]
+    assert db.status_updates[-1] == (1, "awaiting_approval", None)
 
 
 @pytest.mark.asyncio

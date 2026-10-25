@@ -8,11 +8,11 @@ interface Category {
 }
 
 const CATEGORIES: Category[] = [
-  { id: "ingestion_data", label: "Ingestion data (configs + chunks + ingestion runs)", requires: ["graph_data"] },
+  { id: "ingestion_data", label: "Ingestion data (configs + chunks + ingestion runs)", requires: ["graph_data", "eval_history"] },
   { id: "documents", label: "Documents", requires: ["graph_data", "golden_qa"] },
   { id: "graph_data", label: "Graph data", requires: [] },
-  { id: "golden_qa", label: "Golden QA dataset", requires: [] },
-  { id: "eval_history", label: "Eval history", requires: [] },
+  { id: "golden_qa", label: "Golden QA dataset", requires: ["eval_history"] },
+  { id: "eval_history", label: "Eval history", requires: ["rca_sessions"] },
   { id: "rca_sessions", label: "RCA sessions", requires: [] },
   { id: "generated_code", label: "Generated code (DB records + generated/ files)", requires: [] },
 ];

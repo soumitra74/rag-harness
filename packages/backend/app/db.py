@@ -509,6 +509,21 @@ class Database:
                 "ALTER TABLE ingestion_runs ADD COLUMN IF NOT EXISTS cost_usd FLOAT"
             )
             await conn.execute("ALTER TABLE sweeps ADD COLUMN IF NOT EXISTS codegen_budget JSONB")
+            await conn.execute("ALTER TABLE sweeps ADD COLUMN IF NOT EXISTS bootstrap_options JSONB")
+            # Existing sweeps only get bootstrap_complete=TRUE when they already saved
+            # candidates, which the old code did only after bootstrap finished.
+            await conn.execute(
+                """
+                DO $$ BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                                   WHERE table_name = 'sweeps' AND column_name = 'bootstrap_complete') THEN
+                        ALTER TABLE sweeps ADD COLUMN bootstrap_complete BOOLEAN NOT NULL DEFAULT FALSE;
+                        UPDATE sweeps SET bootstrap_complete = TRUE
+                            WHERE id IN (SELECT sweep_id FROM sweep_configs);
+                    END IF;
+                END $$
+                """
+            )
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS codegen_runs (
@@ -621,6 +636,35 @@ class Database:
             await conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS context_text TEXT"
             )
+
+    async def get_or_create_experiment_config(
+        self,
+        chunking_strategy: str,
+        chunk_size: int,
+        chunk_overlap: int,
+        embedding_provider: str,
+        embedding_model: str,
+        embedding_dim: int,
+    ) -> ExperimentConfig:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, chunking_strategy, chunk_size, chunk_overlap,
+                       embedding_provider, embedding_model, embedding_dim
+                FROM experiment_configs
+                WHERE chunking_strategy = $1 AND chunk_size = $2 AND chunk_overlap = $3
+                  AND embedding_provider = $4 AND embedding_model = $5 AND embedding_dim = $6
+                ORDER BY id LIMIT 1
+                """,
+                chunking_strategy, chunk_size, chunk_overlap,
+                embedding_provider, embedding_model, embedding_dim,
+            )
+        if row is not None:
+            return ExperimentConfig(**dict(row))
+        return await self.create_experiment_config(
+            chunking_strategy, chunk_size, chunk_overlap,
+            embedding_provider, embedding_model, embedding_dim,
+        )
 
     async def create_experiment_config(
         self,
@@ -795,13 +839,23 @@ class Database:
 
     async def create_sweep(
         self, ingestion_budget: dict, eval_budget: dict, codegen_budget: dict | None = None,
+        bootstrap_options: dict | None = None,
     ) -> int:
         async with self.pool.acquire() as conn:
             return await conn.fetchval(
-                "INSERT INTO sweeps (ingestion_budget, eval_budget, codegen_budget) "
-                "VALUES ($1::jsonb, $2::jsonb, $3::jsonb) RETURNING id",
+                "INSERT INTO sweeps (ingestion_budget, eval_budget, codegen_budget, bootstrap_options) "
+                "VALUES ($1::jsonb, $2::jsonb, $3::jsonb, $4::jsonb) RETURNING id",
                 json.dumps(ingestion_budget), json.dumps(eval_budget),
                 json.dumps(codegen_budget) if codegen_budget is not None else None,
+                json.dumps(bootstrap_options) if bootstrap_options is not None else None,
+            )
+
+    async def finish_bootstrap(self, sweep_id: int) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE sweeps SET status = 'awaiting_approval', bootstrap_complete = TRUE "
+                "WHERE id = $1",
+                sweep_id,
             )
 
     async def insert_codegen_run(
@@ -939,7 +993,7 @@ class Database:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT s.id, s.status,
+                SELECT s.id, s.status, s.bootstrap_complete,
                        (SELECT COUNT(*) FROM sweep_configs sc WHERE sc.sweep_id = s.id) AS config_count
                 FROM sweeps s ORDER BY s.id DESC LIMIT 1
                 """
@@ -956,6 +1010,8 @@ class Database:
             sweep["eval_budget"] = json.loads(sweep["eval_budget"])
             if sweep.get("codegen_budget") is not None:
                 sweep["codegen_budget"] = json.loads(sweep["codegen_budget"])
+            if sweep.get("bootstrap_options") is not None:
+                sweep["bootstrap_options"] = json.loads(sweep["bootstrap_options"])
             if sweep.get("corpus_snapshot") is not None:
                 sweep["corpus_snapshot"] = json.loads(sweep["corpus_snapshot"])
             return sweep

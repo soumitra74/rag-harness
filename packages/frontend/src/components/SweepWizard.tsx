@@ -46,11 +46,16 @@ export function SweepWizard({ onExit, onExitToEvalHistory, initialSweepId }: Swe
           />
         )}
         {page === 3 && sweepId !== null && (
-          <BootstrapReviewPanel sweepId={sweepId} onApproved={() => setPage(4)} />
+          <BootstrapReviewPanel
+            sweepId={sweepId}
+            onApproved={() => setPage(4)}
+            onRetry={() => setPage(4)}
+          />
         )}
         {page === 4 && sweepId !== null && (
           <SweepProgressPanel
             sweepId={sweepId}
+            onAwaitingApproval={() => setPage(3)}
             onAwaitingSuggestion={() => setPage(5)}
             onFinished={() => setPage(6)}
           />

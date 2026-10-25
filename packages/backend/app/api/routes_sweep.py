@@ -99,48 +99,58 @@ def _sweep_to_dict(sweep: dict) -> dict:
     }
 
 
+def _get_codegen_provider(request: Request):
+    settings = request.app.state.settings
+    return MeteredProvider(
+        get_codegen_provider(settings), request.app.state.db,
+        settings.codegen_provider or settings.eval_judge_provider,
+        settings.codegen_model or settings.eval_judge_model,
+        settings.judge_cost_per_1k_in_usd, settings.judge_cost_per_1k_out_usd,
+    )
+
+
+def _bootstrap_coroutine(request: Request, sweep: dict):
+    options = sweep.get("bootstrap_options") or {}
+    codegen_tasks = options.get("codegen_tasks")
+    reset_graph_labels(request.app.state.ner)
+    return run_bootstrap(
+        request.app.state.db, _get_provider(request), request.app.state.ner,
+        request.app.state.settings, sweep["id"], options.get("generate_golden_qa", False),
+        codegen_tasks=codegen_tasks,
+        codegen_budget=sweep.get("codegen_budget"),
+        codegen_provider=_get_codegen_provider(request) if codegen_tasks else None,
+    )
+
+
 @router.post("/api/sweep/start")
 async def start_sweep(request: Request, body: StartSweepRequest):
     _validate_budget(body.ingestion_budget, "ingestion_budget")
     _validate_budget(body.eval_budget, "eval_budget")
     codegen_budget = None
-    codegen_provider = None
     if body.codegen is not None:
         _validate_budget(body.codegen, "codegen", CODEGEN_AXES)
         codegen_budget = {axis: getattr(body.codegen, axis) for axis in CODEGEN_AXES}
-        settings = request.app.state.settings
-        codegen_provider = MeteredProvider(
-            get_codegen_provider(settings), request.app.state.db,
-            settings.codegen_provider or settings.eval_judge_provider,
-            settings.codegen_model or settings.eval_judge_model,
-            settings.judge_cost_per_1k_in_usd, settings.judge_cost_per_1k_out_usd,
-        )
 
     if request.app.state.sweep_in_progress:
         raise HTTPException(status_code=409, detail="A sweep is already in progress")
     request.app.state.sweep_in_progress = True
 
     db = request.app.state.db
-    settings = request.app.state.settings
-    reset_graph_labels(request.app.state.ner)
+    bootstrap_options = {
+        "generate_golden_qa": body.generate_golden_qa,
+        "codegen_tasks": body.codegen.tasks if body.codegen else None,
+    }
     sweep_id = await db.create_sweep(
         body.ingestion_budget.model_dump(), body.eval_budget.model_dump(),
-        codegen_budget=codegen_budget,
+        codegen_budget=codegen_budget, bootstrap_options=bootstrap_options,
     )
-    provider = _get_provider(request)
+    bootstrap = _bootstrap_coroutine(request, {
+        "id": sweep_id, "codegen_budget": codegen_budget, "bootstrap_options": bootstrap_options,
+    })
 
     async def _run_and_release():
         try:
-            await _run_sweep_task(
-                db, sweep_id,
-                run_bootstrap(
-                    db, provider, request.app.state.ner, settings, sweep_id,
-                    body.generate_golden_qa,
-                    codegen_tasks=body.codegen.tasks if body.codegen else None,
-                    codegen_budget=codegen_budget,
-                    codegen_provider=codegen_provider,
-                ),
-            )
+            await _run_sweep_task(db, sweep_id, bootstrap)
         finally:
             request.app.state.sweep_in_progress = False
 
@@ -151,15 +161,13 @@ async def start_sweep(request: Request, body: StartSweepRequest):
 
 @router.get("/api/sweep/latest")
 async def get_latest_sweep(request: Request):
-    # Resumable only once bootstrap has saved configs: resume runs the eval loop
-    # over saved configs, so a sweep paused during bootstrap would never finish.
     latest = await request.app.state.db.get_latest_sweep_summary()
     if latest is None:
         return None
     return {
         "sweep_id": latest["id"],
         "status": latest["status"],
-        "resumable": latest["status"] == "paused" and latest["config_count"] > 0,
+        "resumable": latest["status"] in ("paused", "failed"),
     }
 
 
@@ -220,10 +228,16 @@ async def resume_sweep_route(request: Request, sweep_id: int):
     sweep = await db.get_sweep(sweep_id)
     if sweep is None:
         raise HTTPException(status_code=404, detail=f"Unknown sweep: {sweep_id}")
-    if sweep["status"] != "paused":
+    if sweep["status"] not in ("paused", "failed"):
         raise HTTPException(
-            status_code=409, detail=f"Sweep {sweep_id} is not paused (status: {sweep['status']!r})",
+            status_code=409,
+            detail=f"Sweep {sweep_id} is not paused or failed (status: {sweep['status']!r})",
         )
+
+    if not sweep["bootstrap_complete"]:
+        await db.update_sweep_status(sweep_id, "bootstrapping")
+        asyncio.create_task(_run_sweep_task(db, sweep_id, _bootstrap_coroutine(request, sweep)))
+        return {"sweep_id": sweep_id, "status": "bootstrapping"}
 
     current_files = list_pdf_filenames(settings.corpus_dir)
     if sorted(current_files) != sorted(sweep["corpus_snapshot"] or []):

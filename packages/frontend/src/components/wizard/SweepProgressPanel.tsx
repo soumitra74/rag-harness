@@ -6,6 +6,7 @@ const TERMINAL_STATUSES = new Set(["stopped_budget", "stopped_optimal"]);
 
 interface SweepProgressPanelProps {
   sweepId: number;
+  onAwaitingApproval: () => void;
   onAwaitingSuggestion: () => void;
   onFinished: () => void;
 }
@@ -21,7 +22,7 @@ function formatBudget(spent: { cost_usd: number; minutes: number; iterations: nu
 }
 
 export function SweepProgressPanel({
-  sweepId, onAwaitingSuggestion, onFinished,
+  sweepId, onAwaitingApproval, onAwaitingSuggestion, onFinished,
 }: SweepProgressPanelProps) {
   const [sweep, setSweep] = useState<Sweep | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +47,11 @@ export function SweepProgressPanel({
     try {
       const result = await getSweep(sweepId);
       setSweep(result);
+      if (result.status === "awaiting_approval") {
+        stopPolling();
+        onAwaitingApproval();
+        return true;
+      }
       if (result.status === "awaiting_suggestion") {
         stopPolling();
         onAwaitingSuggestion();
@@ -56,7 +62,7 @@ export function SweepProgressPanel({
         onFinished();
         return true;
       }
-      if (result.status === "paused") {
+      if (result.status === "paused" || result.status === "failed") {
         stopPolling();
         return true;
       }
@@ -106,21 +112,19 @@ export function SweepProgressPanel({
 
   if (error) return <p className="error">{error}</p>;
   if (!sweep) return <p>Loading sweep status...</p>;
-  if (sweep.status === "failed") {
-    return <p className="error">Sweep failed: {sweep.error_message}</p>;
-  }
 
   return (
     <div className="sweep-progress-panel">
       <p>Status: {sweep.status}</p>
+      {sweep.status === "failed" && <p className="error">Sweep failed: {sweep.error_message}</p>}
       <p>Ingestion budget: {formatBudget(sweep.ingestion_spent, sweep.ingestion_budget)}</p>
       <p>Eval budget: {formatBudget(sweep.eval_spent, sweep.eval_budget)}</p>
       {sweep.best_score !== null && <p>Best score so far: {sweep.best_score.toFixed(3)}</p>}
 
-      {sweep.status === "paused" && (
+      {(sweep.status === "paused" || sweep.status === "failed") && (
         <div>
           <button onClick={handleResume} disabled={resuming}>
-            {resuming ? "Resuming..." : "Resume"}
+            {resuming ? "Resuming..." : sweep.status === "failed" ? "Retry" : "Resume"}
           </button>
           {resumeError && <p className="error">{resumeError}</p>}
         </div>

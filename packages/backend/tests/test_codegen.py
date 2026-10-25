@@ -236,7 +236,10 @@ async def test_codegen_failure_stops_bootstrap_before_ingestion(monkeypatch):
         async def set_corpus_snapshot(self, sweep_id, filenames):
             pass
 
-        async def create_experiment_config(self, **kwargs):
+        async def list_sweep_configs(self, sweep_id):
+            return []
+
+        async def get_or_create_experiment_config(self, **kwargs):
             self.created_configs.append(kwargs)
 
     async def fake_inspect(provider, corpus_dir):
