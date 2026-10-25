@@ -58,6 +58,16 @@ async def test_inspect_corpus_drops_candidates_with_unknown_chunking_strategy(tm
     bad = [dict(CANNED_CANDIDATES[0], chunking_strategy="not_a_real_strategy")]
     provider = FakeProvider(json.dumps(bad))
 
+    with pytest.raises(CorpusInspectionError):
+        await inspect_corpus(provider, str(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_inspect_corpus_drops_candidates_with_unknown_embedding_model(tmp_path):
+    (tmp_path / "doc1.pdf").write_bytes(b"not a real pdf")
+    mixed = [dict(CANNED_CANDIDATES[0], embedding_model="made-up-model"), CANNED_CANDIDATES[1]]
+    provider = FakeProvider(json.dumps(mixed))
+
     candidates = await inspect_corpus(provider, str(tmp_path))
 
-    assert candidates == []
+    assert [c.rationale for c in candidates] == [CANNED_CANDIDATES[1]["rationale"]]

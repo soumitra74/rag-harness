@@ -2,8 +2,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.api.routes_configs import ALL_CHUNKING_STRATEGIES
+from app.providers.embedding_catalog import get_embedding_dim
 from app.services.chunking import extract_pages
 from app.services.llm_json import extract_json
+from app.services.sweep_log import progress_log
 
 SYSTEM_PROMPT = """You are helping configure a RAG (retrieval-augmented generation) pipeline for
 a new corpus. Given a summary of the corpus's documents, propose 2-3 candidate ingestion
@@ -60,12 +62,25 @@ async def inspect_corpus(provider, corpus_dir: str) -> list[CorpusConfigCandidat
 
     prompt = f"{SYSTEM_PROMPT}\n\n{_corpus_summary(corpus_dir, filenames)}"
     response = await provider.complete(prompt)
+    progress_log.info("corpus inspector raw reply: %s", response.text)
     raw_candidates = extract_json(response.text)
 
     candidates = []
     for item in raw_candidates:
+        description = (
+            f"{item.get('chunking_strategy')} size={item.get('chunk_size')} "
+            f"overlap={item.get('chunk_overlap')} "
+            f"{item.get('embedding_provider')}/{item.get('embedding_model')}"
+        )
         if item.get("chunking_strategy") not in ALL_CHUNKING_STRATEGIES:
+            progress_log.info("corpus inspector dropped candidate (unknown chunking strategy): %s",
+                              description)
             continue
+        if get_embedding_dim(item.get("embedding_provider"), item.get("embedding_model")) is None:
+            progress_log.info("corpus inspector dropped candidate (unknown embedding provider/model): %s",
+                              description)
+            continue
+        progress_log.info("corpus inspector accepted candidate: %s", description)
         candidates.append(CorpusConfigCandidate(
             chunking_strategy=item["chunking_strategy"],
             chunk_size=item["chunk_size"],
@@ -74,4 +89,8 @@ async def inspect_corpus(provider, corpus_dir: str) -> list[CorpusConfigCandidat
             embedding_model=item["embedding_model"],
             rationale=item["rationale"],
         ))
+    if not candidates:
+        raise CorpusInspectionError(
+            "Corpus inspector proposed no candidate with a known embedding provider and model"
+        )
     return candidates

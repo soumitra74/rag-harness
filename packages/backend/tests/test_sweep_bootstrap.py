@@ -82,7 +82,7 @@ class _FakeIngestResult:
     page_count = 0
 
 
-async def _fake_ingest_pdf(filename, pdf_bytes, db, embedding_provider, config):
+async def _fake_ingest_pdf(filename, pdf_bytes, db, embedding_provider, config, ocr_page=None):
     return _FakeIngestResult()
 
 

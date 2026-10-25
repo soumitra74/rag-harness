@@ -28,6 +28,12 @@ from app.services.sweep_summary import generate_sweep_summary
 
 GOLDEN_QA_REQUIRED_KEYS = {"id", "question", "reference_answer", "golden_pages", "query_type"}
 
+INGEST_FAILURE_RATIO = 0.25
+
+
+class IngestFailedError(Exception):
+    pass
+
 # Global Constraint: "3 consecutive non-improving candidates (configurable)
 # triggers awaiting_suggestion". Enforced here against the real persisted
 # scores, not left to the next-config subagent's own self-report (review
@@ -92,11 +98,19 @@ async def _ingest_and_backfill_config(db, ner, settings, config, sweep_id: int |
                     "chunk_count": result.chunk_count, "page_count": result.page_count,
                 })
             except Exception as exc:
+                progress_log.error("sweep %s: config %d file %s failed: %s",
+                                   sweep_id, config.id, filename, exc)
                 results.append({"filename": filename, "error": str(exc)})
         await record_ingestion_metrics(db, config, results, input_size_bytes, start, settings, sweep_id)
         errors = sum(1 for r in results if "error" in r)
         progress_log.info("sweep %s: config %d ingested %d file(s), %d error(s), %.1fs",
                           sweep_id, config.id, len(results), errors, time.monotonic() - start)
+        if results and errors / len(results) >= INGEST_FAILURE_RATIO:
+            first = next(r for r in results if "error" in r)
+            raise IngestFailedError(
+                f"Ingestion failed for config {config.id}: {errors} of {len(results)} file(s) "
+                f"failed. First error ({first['filename']}): {first['error']}"
+            )
     with stage(sweep_id, "graph_backfill", config=config.id):
         await backfill_graph_for_config(db, ner, config)
 
@@ -180,7 +194,7 @@ async def run_bootstrap(
 
         await db.finish_bootstrap(sweep_id)
         progress_log.info("sweep %s: bootstrap complete, awaiting approval", sweep_id)
-    except (CorpusInspectionError, GoldenQAGenerationError, CodegenFailed) as exc:
+    except (CorpusInspectionError, GoldenQAGenerationError, CodegenFailed, IngestFailedError) as exc:
         progress_log.error("sweep %s: bootstrap failed: %s", sweep_id, exc)
         await db.update_sweep_status(sweep_id, "failed", error_message=str(exc))
 
