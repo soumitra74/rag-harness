@@ -34,17 +34,27 @@ async def backfill_graph_for_config(db, ner, config) -> dict:
 
     for doc in documents:
         document_id = str(doc["document_id"])
-        async for chunk in _iter_all_chunks(db, config.id, config.embedding_dim, document_id):
-            chunks_processed += 1
-            extracted = await ner.extract_windowed(chunk["chunk_text"])
-            for entity in extracted:
-                entity_id = await db.insert_entity(entity.entity_type, entity.normalized_text)
-                entities_touched.add(entity_id)
-                await db.insert_mention(
-                    config.id, document_id, str(chunk["id"]), entity_id,
-                    entity.char_start, entity.char_end,
-                )
-                mentions_created += 1
+        chunks = [
+            chunk async for chunk in _iter_all_chunks(db, config.id, config.embedding_dim, document_id)
+        ]
+        chunks_processed += len(chunks)
+        extracted_per_chunk = await ner.extract_windowed_batch([c["chunk_text"] for c in chunks])
+
+        pairs = {
+            (entity.entity_type, entity.normalized_text)
+            for extracted in extracted_per_chunk for entity in extracted
+        }
+        entity_ids = await db.upsert_entities(sorted(pairs))
+        mentions = [
+            (str(chunk["id"]), entity_ids[(entity.entity_type, entity.normalized_text)],
+             entity.char_start, entity.char_end)
+            for chunk, extracted in zip(chunks, extracted_per_chunk)
+            for entity in extracted
+        ]
+        await db.insert_mentions(config.id, document_id, mentions)
+        entities_touched.update(entity_ids.values())
+        mentions_created += len(mentions)
+
         cooccurrences_created += await db.derive_cooccurrence_edges(
             config.id, config.embedding_dim, document_id
         )

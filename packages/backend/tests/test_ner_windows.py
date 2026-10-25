@@ -103,3 +103,35 @@ def _all_positions(haystack: str, needle: str) -> list[int]:
         positions.append(at)
         at = haystack.find(needle, at + 1)
     return positions
+
+
+class MarkerGlinerModel:
+    marker = "says the value is"
+
+    def predict_entities(self, text, labels, threshold=0.5):
+        return [
+            {"start": at, "end": at + len(self.marker), "text": self.marker, "label": "METRIC", "score": 0.9}
+            for at in _all_positions(text, self.marker)
+        ]
+
+    def batch_predict_entities(self, texts, labels, threshold=0.5):
+        return [self.predict_entities(text, labels, threshold) for text in texts]
+
+
+@pytest.mark.asyncio
+async def test_extract_windowed_batch_matches_per_text_extraction(monkeypatch):
+    import app.services.ner as ner_module
+
+    monkeypatch.setattr(ner_module, "NER_BATCH_SIZE", 3)
+    monkeypatch.setattr(ner_module, "ner_windows", lambda t, count: ner_windows(
+        t, words, max_tokens=60, overlap_tokens=12,
+    ))
+    texts = [_long_text(40), _long_text(12), "no markers here at all"]
+    service = WordCountNER(MarkerGlinerModel())
+
+    batched = await service.extract_windowed_batch(texts)
+    single = [await service.extract_windowed(text) for text in texts]
+
+    assert batched == single
+    assert len(batched[0]) == 40
+    assert batched[2] == []

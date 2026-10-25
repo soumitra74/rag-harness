@@ -19,6 +19,9 @@ class FakeNER:
     async def extract_windowed(self, text):
         return await self.extract(text)
 
+    async def extract_windowed_batch(self, texts):
+        return [await self.extract_windowed(text) for text in texts]
+
 
 class FakeExtractedEntity:
     def __init__(self, entity_type, normalized_text, char_start=0, char_end=0):
@@ -49,11 +52,12 @@ class FakeDatabase:
             1,
         )
 
-    async def insert_entity(self, entity_type, normalized_text):
-        return f"entity-{entity_type}-{normalized_text}"
+    async def upsert_entities(self, pairs):
+        return {(t, n): f"entity-{t}-{n}" for t, n in pairs}
 
-    async def insert_mention(self, config_id, document_id, chunk_id, entity_id, char_start, char_end):
-        self.mentions.append((config_id, chunk_id, entity_id))
+    async def insert_mentions(self, config_id, document_id, mentions):
+        for chunk_id, entity_id, _, _ in mentions:
+            self.mentions.append((config_id, chunk_id, entity_id))
 
     async def derive_cooccurrence_edges(self, config_id, dim, document_id):
         self.cooccurrence_calls.append((config_id, dim, document_id))

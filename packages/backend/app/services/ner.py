@@ -8,6 +8,7 @@ from app.services.ner_windows import ner_windows
 MODEL_NAME = "urchade/gliner_base"
 ENTITY_LABELS = ["REPORT_NUMBER", "DATA_COUNTER_ID", "REPORT_DATE", "AIRCRAFT_TYPE"]
 SCORE_THRESHOLD = 0.5
+NER_BATCH_SIZE = 16
 
 
 def normalize_entity_text(text: str) -> str:
@@ -37,9 +38,8 @@ class NERService:
             self._model = GLiNER.from_pretrained(MODEL_NAME)
         return self._model
 
-    def _predict(self, text: str, labels: list[str]) -> list[ExtractedEntity]:
-        model = self._get_model()
-        raw = model.predict_entities(text, labels, threshold=SCORE_THRESHOLD)
+    @staticmethod
+    def _to_entities(raw: list[dict]) -> list[ExtractedEntity]:
         return [
             ExtractedEntity(
                 entity_type=r["label"],
@@ -50,6 +50,14 @@ class NERService:
             )
             for r in raw
         ]
+
+    def _predict(self, text: str, labels: list[str]) -> list[ExtractedEntity]:
+        raw = self._get_model().predict_entities(text, labels, threshold=SCORE_THRESHOLD)
+        return self._to_entities(raw)
+
+    def _predict_batch(self, texts: list[str], labels: list[str]) -> list[list[ExtractedEntity]]:
+        raw = self._get_model().batch_predict_entities(texts, labels, threshold=SCORE_THRESHOLD)
+        return [self._to_entities(row) for row in raw]
 
     async def extract(self, text: str, labels: list[str] | None = None) -> list[ExtractedEntity]:
         return await asyncio.to_thread(self._predict, text, labels or self.labels)
@@ -73,6 +81,36 @@ class NERService:
                 seen.add(key)
                 merged.append(replace(entity, char_start=start, char_end=end))
         return merged
+
+    async def extract_windowed_batch(
+        self, texts: list[str], labels: list[str] | None = None,
+    ) -> list[list[ExtractedEntity]]:
+        """Same result as calling extract_windowed on each text, but windows from
+        all texts share batched model calls."""
+        window_jobs = [
+            (text_index, window_start, window_end)
+            for text_index, text in enumerate(texts)
+            for window_start, window_end in ner_windows(text, self._count_tokens)
+        ]
+        results: list[list[ExtractedEntity]] = [[] for _ in texts]
+        seen: list[set[tuple[str, int, int]]] = [set() for _ in texts]
+        for batch_start in range(0, len(window_jobs), NER_BATCH_SIZE):
+            batch = window_jobs[batch_start:batch_start + NER_BATCH_SIZE]
+            predictions = await asyncio.to_thread(
+                self._predict_batch,
+                [texts[i][start:end] for i, start, end in batch],
+                labels or self.labels,
+            )
+            for (text_index, window_start, _), entities in zip(batch, predictions):
+                for entity in entities:
+                    start = entity.char_start + window_start
+                    end = entity.char_end + window_start
+                    key = (entity.entity_type, start, end)
+                    if key in seen[text_index]:
+                        continue
+                    seen[text_index].add(key)
+                    results[text_index].append(replace(entity, char_start=start, char_end=end))
+        return results
 
     async def warm_up(self) -> None:
         """Force model load at a known point (container startup) instead of

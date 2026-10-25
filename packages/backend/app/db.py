@@ -1182,39 +1182,47 @@ class Database:
                 top_k,
             )
 
-    async def insert_entity(self, entity_type: str, normalized_text: str) -> str:
+    async def upsert_entities(self, pairs: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
+        """pairs must be distinct (entity_type, entity_text)."""
+        if not pairs:
+            return {}
         async with self.pool.acquire() as conn:
-            return await conn.fetchval(
+            rows = await conn.fetch(
                 """
                 INSERT INTO graph_entities (entity_type, entity_text)
-                VALUES ($1, $2)
+                SELECT * FROM unnest($1::text[], $2::text[])
                 ON CONFLICT (entity_type, entity_text)
                     DO UPDATE SET entity_type = EXCLUDED.entity_type
-                RETURNING id
+                RETURNING id, entity_type, entity_text
                 """,
-                entity_type,
-                normalized_text,
+                [entity_type for entity_type, _ in pairs],
+                [entity_text for _, entity_text in pairs],
             )
+        return {(row["entity_type"], row["entity_text"]): str(row["id"]) for row in rows}
 
-    async def insert_mention(
-        self, config_id: int, document_id: str, chunk_id: str, entity_id: str,
-        char_start: int | None, char_end: int | None,
+    async def insert_mentions(
+        self, config_id: int, document_id: str, mentions: list[tuple[str, str, int, int]],
     ) -> None:
+        """mentions: (chunk_id, entity_id, char_start, char_end)."""
+        if not mentions:
+            return
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO graph_edges
                     (edge_type, source_id, target_id, config_id, document_id, char_start, char_end)
-                VALUES ('MENTIONS', $1, $2, $3, $4::uuid, $5, $6)
+                SELECT 'MENTIONS', m.chunk_id, m.entity_id, $1, $2::uuid, m.char_start, m.char_end
+                FROM unnest($3::uuid[], $4::uuid[], $5::int[], $6::int[])
+                    AS m(chunk_id, entity_id, char_start, char_end)
                 ON CONFLICT (source_id, target_id, config_id) WHERE edge_type = 'MENTIONS'
                     DO NOTHING
                 """,
-                chunk_id,
-                entity_id,
                 config_id,
                 document_id,
-                char_start,
-                char_end,
+                [chunk_id for chunk_id, _, _, _ in mentions],
+                [entity_id for _, entity_id, _, _ in mentions],
+                [char_start for _, _, char_start, _ in mentions],
+                [char_end for _, _, _, char_end in mentions],
             )
 
     async def fill_mention_documents(self, config_id: int, dim: int) -> int:
