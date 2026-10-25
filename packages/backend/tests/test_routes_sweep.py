@@ -288,6 +288,23 @@ def _insert_bootstrapping_sweep(db, bootstrap_options):
     return sweep_id
 
 
+def test_sweep_judge_is_built_from_app_settings_once(monkeypatch):
+    sentinel = object()
+    calls = []
+
+    def fake_create_judge(settings, router):
+        calls.append((settings, router))
+        return sentinel
+
+    monkeypatch.setattr(routes_sweep, "create_judge", fake_create_judge)
+    state = SimpleNamespace(judge=None, settings="settings", router="router")
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+
+    assert routes_sweep._get_judge(request) is sentinel
+    assert routes_sweep._get_judge(request) is sentinel
+    assert calls == [("settings", "router")]
+
+
 def test_latest_sweep_returns_null_when_no_sweeps(monkeypatch):
     class EmptyDb(FakeDatabase):
         async def get_latest_sweep_summary(self):

@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.services.codegen import CODEGEN_AXES, reset_graph_labels
-from app.services.judge import get_codegen_provider, get_completion_provider
+from app.services.judge import create_judge, get_codegen_provider, get_completion_provider
 from app.services.sweep_log import MeteredProvider
 from app.services.sweep import (
     apply_user_suggestion,
@@ -81,6 +81,12 @@ def _get_provider(request: Request):
             settings.judge_cost_per_1k_in_usd, settings.judge_cost_per_1k_out_usd,
         )
     return request.app.state.sweep_provider
+
+
+def _get_judge(request: Request):
+    if request.app.state.judge is None:
+        request.app.state.judge = create_judge(request.app.state.settings, request.app.state.router)
+    return request.app.state.judge
 
 
 def _sweep_to_dict(sweep: dict) -> dict:
@@ -213,7 +219,7 @@ async def approve_sweep(request: Request, sweep_id: int):
         _run_sweep_task(
             db, sweep_id,
             run_sweep_loop(
-                db, provider, request.app.state.chat_provider, request.app.state.judge,
+                db, provider, request.app.state.chat_provider, _get_judge(request),
                 request.app.state.ner, settings, sweep_id,
             ),
         )
@@ -256,7 +262,7 @@ async def resume_sweep_route(request: Request, sweep_id: int):
         _run_sweep_task(
             db, sweep_id,
             resume_sweep(
-                db, provider, request.app.state.chat_provider, request.app.state.judge,
+                db, provider, request.app.state.chat_provider, _get_judge(request),
                 request.app.state.ner, settings, sweep_id,
             ),
         )
@@ -303,7 +309,7 @@ async def suggest_sweep(request: Request, sweep_id: int, body: SuggestRequest):
         _run_sweep_task(
             db, sweep_id,
             apply_user_suggestion(
-                db, provider, request.app.state.chat_provider, request.app.state.judge,
+                db, provider, request.app.state.chat_provider, _get_judge(request),
                 request.app.state.ner, settings, sweep_id, body.hint, body.explicit_config,
             ),
         )
