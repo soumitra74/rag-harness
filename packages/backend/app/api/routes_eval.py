@@ -141,7 +141,7 @@ async def start_eval_run(request: Request, body: StartEvalRunRequest):
         request.app.state.eval_jobs[job.id] = job
         cycle_id = await db.create_eval_cycle(
             config.id, len(dataset), *judge_identity(settings), body.graph_augmented,
-            rerank_model, rerank_candidates,
+            rerank_model, rerank_candidates, top_k=top_k,
         )
     except Exception:
         request.app.state.eval_running_count -= 1
@@ -195,13 +195,32 @@ async def start_reval_run(request: Request, body: StartRevalRequest):
                 detail=f"Source cycle's config {source_cycle['config_id']} no longer exists",
             )
 
+        try:
+            dataset = load_golden_dataset(settings.eval_dataset_path)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Golden dataset not found: {settings.eval_dataset_path}"
+            ) from exc
+
+        cache = request.app.state.embedding_provider_cache
+        if config.id not in cache:
+            cache[config.id] = get_embedding_provider_for_config(settings, config)
+
+        rerank_model = source_cycle["rerank_model"]
+        reranker = (
+            get_reranker(request.app.state.reranker_cache, rerank_model) if rerank_model else None
+        )
+        top_k = source_cycle["top_k"] or settings.retrieval_top_k
+
         if request.app.state.judge is None:
             request.app.state.judge = create_judge(settings, request.app.state.router)
 
-        job = new_eval_job(config.id, source_cycle["total"])
+        job = new_eval_job(config.id, len(dataset))
         request.app.state.eval_jobs[job.id] = job
         cycle_id = await db.create_eval_cycle(
-            config.id, source_cycle["total"], *judge_identity(settings),
+            config.id, len(dataset), *judge_identity(settings),
+            bool(source_cycle["graph_augmented"]), rerank_model,
+            source_cycle["rerank_candidates"], top_k=top_k,
         )
     except Exception:
         request.app.state.eval_running_count -= 1
@@ -211,10 +230,18 @@ async def start_reval_run(request: Request, body: StartRevalRequest):
         _run_reval_job_and_release(
             request.app.state, job, db, config, request.app.state.judge,
             body.source_cycle_id, cycle_id, settings.eval_judge_concurrency,
-            settings.eval_judge_combine_calls,
+            dataset=dataset, top_k=top_k, embedding_provider=cache[config.id],
+            chat_provider=request.app.state.chat_provider, ner=request.app.state.ner,
+            reranker=reranker, rerank_candidates=source_cycle["rerank_candidates"],
+            graph_augmented=bool(source_cycle["graph_augmented"]),
+            recall_k_values=settings.eval_recall_k_values,
+            combine_calls=settings.eval_judge_combine_calls,
+            generation_cost_per_1k_in_usd=settings.generation_cost_per_1k_in_usd,
+            generation_cost_per_1k_out_usd=settings.generation_cost_per_1k_out_usd,
             judge_cost_per_1k_in_usd=settings.judge_cost_per_1k_in_usd,
             judge_cost_per_1k_out_usd=settings.judge_cost_per_1k_out_usd,
             local_compute_cost_per_hour=settings.local_compute_cost_per_hour,
+            chat_provider_name=settings.chat_provider,
             eval_judge_provider_name=settings.eval_judge_provider,
         )
     )

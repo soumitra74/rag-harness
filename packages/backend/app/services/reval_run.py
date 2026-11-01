@@ -1,28 +1,35 @@
 import asyncio
-import logging
 import time
 
-from app.services.eval_run import EvalJob, EvalQueryResult, _summarize
+from app.services.eval_run import EvalQueryResult, _summarize, new_eval_job, run_eval_job
 from app.services.judge import Judge
 
-logger = logging.getLogger(__name__)
-
-# No generation call -- reval reuses the original run's generated_answer
-# rather than calling answer_question() again. combine_calls=True merges
-# correctness/answer_relevance/citation_completeness into one
-# score_reference_based call (+ faithfulness + info_recall = 3 total);
-# False scores those three separately (+ faithfulness + info_recall = 5
-# total). Mirrors eval_run.py's LLM_CALLS_PER_QUESTION_COMBINED/_SEPARATE.
+# No generation call on the re-judge path: a question with a usable stored
+# answer reuses it. combine_calls=True merges correctness/answer_relevance/
+# citation_completeness into one score_reference_based call (+ faithfulness +
+# info_recall = 3 total); False scores those three separately (+ faithfulness +
+# info_recall = 5 total). Mirrors eval_run.py's LLM_CALLS_PER_QUESTION_COMBINED/_SEPARATE.
 LLM_CALLS_PER_QUESTION_COMBINED = 3
 LLM_CALLS_PER_QUESTION_SEPARATE = 5
 
 
 async def run_reval_job(
-    job: EvalJob, db, config, judge: Judge, source_cycle_id: int, cycle_id: int,
-    judge_concurrency: int, combine_calls: bool = True,
+    job, db, config, judge: Judge, source_cycle_id: int, cycle_id: int,
+    judge_concurrency: int, *, dataset: list[dict], top_k: int, embedding_provider,
+    chat_provider, ner, reranker, rerank_candidates: int | None, graph_augmented: bool,
+    recall_k_values: str, combine_calls: bool = True,
+    generation_cost_per_1k_in_usd: float = 0.0, generation_cost_per_1k_out_usd: float = 0.0,
     judge_cost_per_1k_in_usd: float = 0.0, judge_cost_per_1k_out_usd: float = 0.0,
-    local_compute_cost_per_hour: float = 0.0, eval_judge_provider_name: str = "openai",
+    local_compute_cost_per_hour: float = 0.0,
+    chat_provider_name: str = "openai", eval_judge_provider_name: str = "openai",
 ) -> None:
+    """Re-judges every question in the golden dataset with the current judge.
+
+    A question is re-scored from its stored answer only when that answer is
+    usable: the run succeeded and every retrieved chunk still exists. Anything
+    else -- a question that failed in the source run, or whose source documents
+    were re-ingested -- is answered and judged afresh, so a failed run is
+    repaired rather than carried forward."""
     llm_calls_per_question = (
         LLM_CALLS_PER_QUESTION_COMBINED if combine_calls else LLM_CALLS_PER_QUESTION_SEPARATE
     )
@@ -33,147 +40,171 @@ async def run_reval_job(
             return await coro
 
     source_rows = await db.get_cycle_reval_source(source_cycle_id)
+    stored = {row["query_id"]: row for row in source_rows if row["error"] is None}
+
+    candidates = []
+    regenerate: list[tuple[int, dict]] = []
+    for index, item in enumerate(dataset):
+        query_id = await db.find_or_create_eval_query(
+            item["question"], item["reference_answer"], item.get("query_type")
+        )
+        if query_id in stored:
+            candidates.append((index, stored[query_id]))
+        else:
+            regenerate.append((index, item))
+
     all_chunk_ids = {
-        str(cid) for row in source_rows for cid in (row["retrieved_chunk_ids"] or [])
+        str(cid) for _, row in candidates for cid in (row["retrieved_chunk_ids"] or [])
     }
     chunk_map = await db.resolve_chunks(list(all_chunk_ids), config.embedding_dim)
 
-    for row in source_rows:
+    results: dict[int, EvalQueryResult] = {}
+    for index, row in candidates:
         chunk_ids = [str(cid) for cid in (row["retrieved_chunk_ids"] or [])]
-        resolved = [chunk_map[cid] for cid in chunk_ids if cid in chunk_map]
-
-        if len(resolved) < len(chunk_ids):
-            # The source document(s) were likely re-ingested since the
-            # original run -- that deletes and regenerates chunks_dim_N rows
-            # with new ids, orphaning the ones this question was retrieved
-            # against. Can't faithfully reconstruct context or source labels,
-            # so skip judging rather than score against wrong/missing context.
-            missing = len(chunk_ids) - len(resolved)
-            error = (
-                f"StaleContext: {missing}/{len(chunk_ids)} retrieved chunks no longer "
-                "exist (documents likely re-ingested since the original run)"
-            )
-            logger.warning("reval question %r: %s", row["query_id"], error)
-            job.per_query.append(EvalQueryResult(
-                id=str(row["query_id"]), question=row["question"], hit=bool(row["hit_rate"]),
-                mrr=row["mrr"], citation_accuracy=row["citation_accuracy"],
-                citation_recall=row["citation_recall"] or 0.0,
-                retrieval_metrics=row["retrieval_metrics"] or {},
-                correctness=0.0, correctness_reasoning="",
-                generated_answer=row["generated_answer"],
-                generation_latency_ms=row["generation_latency_ms"] or 0, eval_latency_ms=0,
-                error=error,
-            ))
+        if not all(cid in chunk_map for cid in chunk_ids):
+            regenerate.append((index, dataset[index]))
             continue
-
-        # Same preference as chat.py's _display_text: sentence_window chunks
-        # carry their padded context separately from the embedded sentence.
-        context_chunks = [c["context_text"] or c["chunk_text"] for c in resolved]
-        source_labels = [
-            f"Source {i}: {c['filename']}, page {c['page_number']}"
-            for i, c in enumerate(resolved, start=1)
-        ]
-
-        eval_start = time.monotonic()
-        if combine_calls:
-            combined_result, faithfulness_result, recall_result = await asyncio.gather(
-                _bounded(judge.score_reference_based(
-                    row["question"], row["reference_answer"], row["generated_answer"],
-                    source_labels,
-                )),
-                _bounded(judge.score_faithfulness(
-                    row["question"], context_chunks, row["generated_answer"]
-                )),
-                _bounded(judge.score_info_recall(row["reference_answer"], context_chunks)),
-            )
-            correctness = combined_result.correctness
-            correctness_reasoning = combined_result.correctness_reasoning
-            answer_relevance = combined_result.answer_relevance
-            answer_relevance_reasoning = combined_result.answer_relevance_reasoning
-            citation_completeness = combined_result.citation_completeness
-            citation_completeness_reasoning = combined_result.citation_completeness_reasoning
-            judge_calls = [combined_result, faithfulness_result, recall_result]
-        else:
-            (
-                correctness_result, faithfulness_result, relevance_result,
-                recall_result, citation_result,
-            ) = await asyncio.gather(
-                _bounded(judge.score_correctness(
-                    row["question"], row["reference_answer"], row["generated_answer"]
-                )),
-                _bounded(judge.score_faithfulness(
-                    row["question"], context_chunks, row["generated_answer"]
-                )),
-                _bounded(judge.score_answer_relevance(row["question"], row["generated_answer"])),
-                _bounded(judge.score_info_recall(row["reference_answer"], context_chunks)),
-                _bounded(judge.score_citation_completeness(
-                    row["question"], source_labels, row["generated_answer"]
-                )),
-            )
-            correctness = correctness_result.score
-            correctness_reasoning = correctness_result.reasoning
-            answer_relevance = relevance_result.score
-            answer_relevance_reasoning = relevance_result.reasoning
-            citation_completeness = citation_result.score
-            citation_completeness_reasoning = citation_result.reasoning
-            judge_calls = [
-                correctness_result, faithfulness_result, relevance_result,
-                recall_result, citation_result,
-            ]
-        eval_latency_ms = int((time.monotonic() - eval_start) * 1000)
-        eval_input_tokens = sum(jr.input_tokens or 0 for jr in judge_calls)
-        eval_output_tokens = sum(jr.output_tokens or 0 for jr in judge_calls)
-
-        await db.record_eval_run(
-            config.id, row["query_id"], row["generated_answer"], row["hit_rate"], row["mrr"],
-            row["citation_accuracy"], correctness,
-            row["generation_latency_ms"] or 0, eval_latency_ms,
-            cycle_id=cycle_id,
-            citation_recall=row["citation_recall"],
-            retrieval_metrics=row["retrieval_metrics"],
-            rerank_latency_ms=row.get("rerank_latency_ms"),
-            faithfulness=faithfulness_result.score,
-            answer_relevance=answer_relevance,
-            info_recall=recall_result.score,
-            citation_completeness=citation_completeness,
-            generation_input_tokens=row["generation_input_tokens"],
-            generation_output_tokens=row["generation_output_tokens"],
-            eval_input_tokens=eval_input_tokens, eval_output_tokens=eval_output_tokens,
-            llm_call_count=llm_calls_per_question,
-            retrieved_chunk_ids=chunk_ids,
+        resolved = [chunk_map[cid] for cid in chunk_ids]
+        results[index] = await _rejudge(
+            db, config, judge, _bounded, row, resolved, chunk_ids, combine_calls,
+            llm_calls_per_question, cycle_id,
         )
 
-        job.per_query.append(EvalQueryResult(
-            id=str(row["query_id"]), question=row["question"], hit=bool(row["hit_rate"]),
-            mrr=row["mrr"], citation_accuracy=row["citation_accuracy"],
-            citation_recall=row["citation_recall"] or 0.0,
-            retrieval_metrics=row["retrieval_metrics"] or {},
-            rerank_latency_ms=row.get("rerank_latency_ms"),
-            correctness=correctness,
-            correctness_reasoning=correctness_reasoning,
-            generated_answer=row["generated_answer"],
-            generation_latency_ms=row["generation_latency_ms"] or 0,
-            eval_latency_ms=eval_latency_ms,
-            faithfulness=faithfulness_result.score,
-            faithfulness_reasoning=faithfulness_result.reasoning,
-            answer_relevance=answer_relevance,
-            answer_relevance_reasoning=answer_relevance_reasoning,
-            info_recall=recall_result.score,
-            info_recall_reasoning=recall_result.reasoning,
-            citation_completeness=citation_completeness,
-            citation_completeness_reasoning=citation_completeness_reasoning,
-            generation_input_tokens=row["generation_input_tokens"],
-            generation_output_tokens=row["generation_output_tokens"],
-            eval_input_tokens=eval_input_tokens, eval_output_tokens=eval_output_tokens,
-            llm_call_count=llm_calls_per_question,
-        ))
+    if regenerate:
+        regenerate.sort(key=lambda pair: pair[0])
+        regen_job = new_eval_job(config.id, len(regenerate))
+        await run_eval_job(
+            regen_job, db, config, embedding_provider, chat_provider, judge,
+            [item for _, item in regenerate], top_k, cycle_id, judge_concurrency,
+            combine_calls, graph_augmented, ner, recall_k_values,
+            reranker=reranker, rerank_candidates=rerank_candidates,
+            generation_cost_per_1k_in_usd=generation_cost_per_1k_in_usd,
+            generation_cost_per_1k_out_usd=generation_cost_per_1k_out_usd,
+            judge_cost_per_1k_in_usd=judge_cost_per_1k_in_usd,
+            judge_cost_per_1k_out_usd=judge_cost_per_1k_out_usd,
+            local_compute_cost_per_hour=local_compute_cost_per_hour,
+            chat_provider_name=chat_provider_name,
+            eval_judge_provider_name=eval_judge_provider_name,
+            finalize=False,
+        )
+        for (index, _), result in zip(regenerate, regen_job.per_query):
+            results[index] = result
 
+    job.per_query = [results[index] for index in sorted(results)]
     job.aggregates = _summarize(
         job.per_query,
+        generation_cost_per_1k_in_usd=generation_cost_per_1k_in_usd,
+        generation_cost_per_1k_out_usd=generation_cost_per_1k_out_usd,
         judge_cost_per_1k_in_usd=judge_cost_per_1k_in_usd,
         judge_cost_per_1k_out_usd=judge_cost_per_1k_out_usd,
         local_compute_cost_per_hour=local_compute_cost_per_hour,
-        eval_judge_provider=eval_judge_provider_name,
+        chat_provider=chat_provider_name, eval_judge_provider=eval_judge_provider_name,
     )
     job.status = "completed"
     await db.complete_eval_cycle(cycle_id, job.status, job.aggregates)
+
+
+async def _rejudge(
+    db, config, judge: Judge, bounded, row, resolved, chunk_ids, combine_calls,
+    llm_calls_per_question, cycle_id,
+) -> EvalQueryResult:
+    # Same preference as chat.py's _display_text: sentence_window chunks
+    # carry their padded context separately from the embedded sentence.
+    context_chunks = [c["context_text"] or c["chunk_text"] for c in resolved]
+    source_labels = [
+        f"Source {i}: {c['filename']}, page {c['page_number']}"
+        for i, c in enumerate(resolved, start=1)
+    ]
+
+    eval_start = time.monotonic()
+    if combine_calls:
+        combined_result, faithfulness_result, recall_result = await asyncio.gather(
+            bounded(judge.score_reference_based(
+                row["question"], row["reference_answer"], row["generated_answer"], source_labels,
+            )),
+            bounded(judge.score_faithfulness(
+                row["question"], context_chunks, row["generated_answer"]
+            )),
+            bounded(judge.score_info_recall(row["reference_answer"], context_chunks)),
+        )
+        correctness = combined_result.correctness
+        correctness_reasoning = combined_result.correctness_reasoning
+        answer_relevance = combined_result.answer_relevance
+        answer_relevance_reasoning = combined_result.answer_relevance_reasoning
+        citation_completeness = combined_result.citation_completeness
+        citation_completeness_reasoning = combined_result.citation_completeness_reasoning
+        judge_calls = [combined_result, faithfulness_result, recall_result]
+    else:
+        (
+            correctness_result, faithfulness_result, relevance_result,
+            recall_result, citation_result,
+        ) = await asyncio.gather(
+            bounded(judge.score_correctness(
+                row["question"], row["reference_answer"], row["generated_answer"]
+            )),
+            bounded(judge.score_faithfulness(
+                row["question"], context_chunks, row["generated_answer"]
+            )),
+            bounded(judge.score_answer_relevance(row["question"], row["generated_answer"])),
+            bounded(judge.score_info_recall(row["reference_answer"], context_chunks)),
+            bounded(judge.score_citation_completeness(
+                row["question"], source_labels, row["generated_answer"]
+            )),
+        )
+        correctness = correctness_result.score
+        correctness_reasoning = correctness_result.reasoning
+        answer_relevance = relevance_result.score
+        answer_relevance_reasoning = relevance_result.reasoning
+        citation_completeness = citation_result.score
+        citation_completeness_reasoning = citation_result.reasoning
+        judge_calls = [
+            correctness_result, faithfulness_result, relevance_result,
+            recall_result, citation_result,
+        ]
+    eval_latency_ms = int((time.monotonic() - eval_start) * 1000)
+    eval_input_tokens = sum(jr.input_tokens or 0 for jr in judge_calls)
+    eval_output_tokens = sum(jr.output_tokens or 0 for jr in judge_calls)
+
+    await db.record_eval_run(
+        config.id, row["query_id"], row["generated_answer"], row["hit_rate"], row["mrr"],
+        row["citation_accuracy"], correctness,
+        row["generation_latency_ms"] or 0, eval_latency_ms,
+        cycle_id=cycle_id,
+        citation_recall=row["citation_recall"],
+        retrieval_metrics=row["retrieval_metrics"],
+        rerank_latency_ms=row.get("rerank_latency_ms"),
+        faithfulness=faithfulness_result.score,
+        answer_relevance=answer_relevance,
+        info_recall=recall_result.score,
+        citation_completeness=citation_completeness,
+        generation_input_tokens=row["generation_input_tokens"],
+        generation_output_tokens=row["generation_output_tokens"],
+        eval_input_tokens=eval_input_tokens, eval_output_tokens=eval_output_tokens,
+        llm_call_count=llm_calls_per_question,
+        retrieved_chunk_ids=chunk_ids,
+    )
+
+    return EvalQueryResult(
+        id=str(row["query_id"]), question=row["question"], hit=bool(row["hit_rate"]),
+        mrr=row["mrr"], citation_accuracy=row["citation_accuracy"],
+        citation_recall=row["citation_recall"] or 0.0,
+        retrieval_metrics=row["retrieval_metrics"] or {},
+        rerank_latency_ms=row.get("rerank_latency_ms"),
+        correctness=correctness,
+        correctness_reasoning=correctness_reasoning,
+        generated_answer=row["generated_answer"],
+        generation_latency_ms=row["generation_latency_ms"] or 0,
+        eval_latency_ms=eval_latency_ms,
+        faithfulness=faithfulness_result.score,
+        faithfulness_reasoning=faithfulness_result.reasoning,
+        answer_relevance=answer_relevance,
+        answer_relevance_reasoning=answer_relevance_reasoning,
+        info_recall=recall_result.score,
+        info_recall_reasoning=recall_result.reasoning,
+        citation_completeness=citation_completeness,
+        citation_completeness_reasoning=citation_completeness_reasoning,
+        generation_input_tokens=row["generation_input_tokens"],
+        generation_output_tokens=row["generation_output_tokens"],
+        eval_input_tokens=eval_input_tokens, eval_output_tokens=eval_output_tokens,
+        llm_call_count=llm_calls_per_question,
+    )
