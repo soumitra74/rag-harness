@@ -223,7 +223,7 @@ async def _run_eval_combo(
 
     cycle_id = await db.create_eval_cycle(
         config.id, len(dataset), *judge_identity(settings), combo["graph_augmented"],
-        combo["rerank_model"], rerank_candidates, sweep_id=sweep_id,
+        combo["rerank_model"], rerank_candidates, sweep_id=sweep_id, top_k=combo["top_k"],
     )
     job = new_eval_job(config.id, len(dataset))
     await run_eval_job(
