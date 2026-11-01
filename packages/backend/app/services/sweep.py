@@ -98,9 +98,10 @@ async def _ingest_and_backfill_config(db, ner, settings, config, sweep_id: int |
                     "chunk_count": result.chunk_count, "page_count": result.page_count,
                 })
             except Exception as exc:
-                progress_log.error("sweep %s: config %d file %s failed: %s",
-                                   sweep_id, config.id, filename, exc)
-                results.append({"filename": filename, "error": str(exc)})
+                error = f"{type(exc).__name__}: {exc}"
+                progress_log.exception("sweep %s: config %d file %s failed: %s",
+                                       sweep_id, config.id, filename, error)
+                results.append({"filename": filename, "error": error})
         await record_ingestion_metrics(db, config, results, input_size_bytes, start, settings, sweep_id)
         errors = sum(1 for r in results if "error" in r)
         progress_log.info("sweep %s: config %d ingested %d file(s), %d error(s), %.1fs",

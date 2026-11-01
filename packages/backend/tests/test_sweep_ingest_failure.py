@@ -41,7 +41,7 @@ async def test_bootstrap_fails_when_a_quarter_of_files_fail(tmp_path, monkeypatc
     assert status == "failed"
     assert "1 of 4 file(s) failed" in error_message
     assert "doc00.pdf" in error_message
-    assert "doc00.pdf failed: embedding model unavailable" in caplog.text
+    assert "doc00.pdf failed: RuntimeError: embedding model unavailable" in caplog.text
 
 
 @pytest.mark.asyncio
