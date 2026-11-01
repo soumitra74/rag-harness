@@ -271,6 +271,7 @@ async def run_eval_job(
     judge_cost_per_1k_in_usd: float = 0.0, judge_cost_per_1k_out_usd: float = 0.0,
     local_compute_cost_per_hour: float = 0.0,
     chat_provider_name: str = "anthropic", eval_judge_provider_name: str = "openai",
+    finalize: bool = True,
 ) -> None:
     llm_calls_per_question = (
         LLM_CALLS_PER_QUESTION_COMBINED if combine_calls else LLM_CALLS_PER_QUESTION_SEPARATE
@@ -437,14 +438,27 @@ async def run_eval_job(
             logger.exception(
                 "eval question %r failed after %dms", item["id"], elapsed_ms
             )
+            error = f"{type(exc).__name__}: {exc}"
             job.per_query.append(EvalQueryResult(
                 id=item["id"], question=item["question"], hit=False, mrr=0.0,
                 citation_accuracy=0.0, citation_recall=0.0, retrieval_metrics={},
                 correctness=0.0, correctness_reasoning="",
                 generated_answer="", generation_latency_ms=elapsed_ms, eval_latency_ms=0,
-                error=f"{type(exc).__name__}: {exc}",
+                error=error,
             ))
+            query_id = await db.find_or_create_eval_query(
+                item["question"], item["reference_answer"], item.get("query_type")
+            )
+            await db.ensure_gold_pages(
+                query_id, [(p["document"], p["page"]) for p in item["golden_pages"]]
+            )
+            await db.record_eval_run(
+                config.id, query_id, "", 0.0, 0.0, 0.0, 0.0, elapsed_ms, 0,
+                cycle_id=cycle_id, error=error,
+            )
 
+    if not finalize:
+        return
     job.aggregates = _summarize(
         job.per_query,
         generation_cost_per_1k_in_usd=generation_cost_per_1k_in_usd,

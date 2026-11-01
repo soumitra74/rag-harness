@@ -408,6 +408,12 @@ class Database:
             await conn.execute(
                 "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS rerank_latency_ms INTEGER"
             )
+            await conn.execute(
+                "ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS error TEXT"
+            )
+            await conn.execute(
+                "ALTER TABLE eval_cycles ADD COLUMN IF NOT EXISTS top_k INT"
+            )
 
             # RCA agent: one session per (cycle_id, query_id) investigation,
             # persisted (not in-memory) so past investigations are browsable
@@ -1498,6 +1504,7 @@ class Database:
         llm_call_count: int | None = None,
         retrieved_chunk_ids: list[str] | None = None,
         rerank_latency_ms: int | None = None,
+        error: str | None = None,
     ) -> None:
         async with self.pool.acquire() as conn:
             await conn.execute(
@@ -1509,9 +1516,9 @@ class Database:
                      info_recall, citation_completeness,
                      generation_input_tokens, generation_output_tokens,
                      eval_input_tokens, eval_output_tokens, llm_call_count, retrieved_chunk_ids,
-                     rerank_latency_ms)
+                     rerank_latency_ms, error)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15,
-                        $16, $17, $18, $19, $20, $21, $22, $23)
+                        $16, $17, $18, $19, $20, $21, $22, $23, $24)
                 """,
                 config_id,
                 query_id,
@@ -1536,21 +1543,22 @@ class Database:
                 llm_call_count,
                 retrieved_chunk_ids,
                 rerank_latency_ms,
+                error,
             )
 
     async def create_eval_cycle(
         self, config_id: int, total: int, judge_provider: str, judge_model: str,
         graph_augmented: bool = False,
         rerank_model: str | None = None, rerank_candidates: int | None = None,
-        sweep_id: int | None = None,
+        sweep_id: int | None = None, top_k: int | None = None,
     ) -> int:
         async with self.pool.acquire() as conn:
             return await conn.fetchval(
                 """
                 INSERT INTO eval_cycles
                     (config_id, status, total, judge_provider, judge_model, graph_augmented,
-                     rerank_model, rerank_candidates, sweep_id)
-                VALUES ($1, 'running', $2, $3, $4, $5, $6, $7, $8)
+                     rerank_model, rerank_candidates, sweep_id, top_k)
+                VALUES ($1, 'running', $2, $3, $4, $5, $6, $7, $8, $9)
                 RETURNING id
                 """,
                 config_id,
@@ -1561,6 +1569,7 @@ class Database:
                 rerank_model,
                 rerank_candidates,
                 sweep_id,
+                top_k,
             )
 
     async def pause_interrupted_sweeps(self) -> int:
@@ -1722,7 +1731,8 @@ class Database:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, config_id, total, status
+                SELECT id, config_id, total, status, graph_augmented, rerank_model,
+                       rerank_candidates, top_k
                 FROM eval_cycles
                 WHERE id = $1 AND deleted_at IS NULL
                 """,
@@ -1743,7 +1753,7 @@ class Database:
                        r.generated_answer, r.hit_rate, r.mrr, r.citation_accuracy,
                        r.citation_recall, r.retrieval_metrics, r.retrieved_chunk_ids,
                        r.generation_latency_ms, r.generation_input_tokens,
-                       r.generation_output_tokens, r.rerank_latency_ms
+                       r.generation_output_tokens, r.rerank_latency_ms, r.error
                 FROM eval_runs r
                 JOIN eval_queries q ON q.id = r.query_id
                 WHERE r.cycle_id = $1
