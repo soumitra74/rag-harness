@@ -27,20 +27,22 @@ from app.routing.from_settings import create_router
 from app.providers.rca_supervisor_provider import RcaSupervisorProvider
 from app.services.ner import NERService
 
-# EvalPanel.tsx/RevalPanel.tsx poll GET /api/eval/run/{job_id} every 2s
-# (POLL_INTERVAL_MS) while a job is running -- a 30-minute eval run floods
-# the access log with ~900 identical 200 OK lines. Hide only those
-# successful polls; failures and every other route still log normally.
-# Mirrors ollama_load_balancer.py's _SkipSuccessfulPolls filter.
-_SUCCESSFUL_EVAL_POLL_LOG = re.compile(r'"GET /api/eval/run/[^"\s?]+(?:\?[^"]*)? HTTP/[^"]+" 200\b')
+# EvalPanel.tsx/RevalPanel.tsx poll GET /api/eval/run/{job_id} and
+# SweepProgressPanel.tsx polls GET /api/sweep/{id} every 2s (POLL_INTERVAL_MS)
+# while a job is running -- a long run floods the access log with identical
+# 200 OK lines. Hide only those successful polls; failures and every other
+# route still log normally. Mirrors ollama_load_balancer.py's _SkipSuccessfulPolls filter.
+_SUCCESSFUL_POLL_LOG = re.compile(
+    r'"GET /api/(?:eval/run|sweep)/[^"\s?]+(?:\?[^"]*)? HTTP/[^"]+" 200\b'
+)
 
 
-class _SkipEvalPollLogs(logging.Filter):
+class _SkipPollLogs(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        return _SUCCESSFUL_EVAL_POLL_LOG.search(record.getMessage()) is None
+        return _SUCCESSFUL_POLL_LOG.search(record.getMessage()) is None
 
 
-logging.getLogger("uvicorn.access").addFilter(_SkipEvalPollLogs())
+logging.getLogger("uvicorn.access").addFilter(_SkipPollLogs())
 
 
 class _TimestampedFormatter(logging.Formatter):
