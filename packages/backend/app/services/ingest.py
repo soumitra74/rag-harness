@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.db import ExperimentConfig
+from app.providers.embedding_catalog import get_max_input_tokens
 from app.services.chunking import chunk_page, extract_pages, normalize_page_text
 
 LOCAL_EMBEDDING_PROVIDERS = {"ollama", "local"}
@@ -44,10 +45,14 @@ async def ingest_pdf(
             for n, text in pages
         ]
 
+    max_tokens = get_max_input_tokens(config.embedding_provider, config.embedding_model)
     chunks = []
     for page_number, text in pages:
         chunks.extend(
-            chunk_page(config.chunking_strategy, page_number, text, config.chunk_size, config.chunk_overlap)
+            chunk_page(
+                config.chunking_strategy, page_number, text, config.chunk_size, config.chunk_overlap,
+                max_tokens=max_tokens,
+            )
         )
 
     document_id = existing_document_id or await db.insert_document(filename)

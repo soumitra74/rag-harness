@@ -307,3 +307,25 @@ def test_strip_null_bytes_removes_nul_from_misdecoded_ligatures():
 
 def test_normalize_page_text_also_strips_null_bytes():
     assert "\x00" not in normalize_page_text("O\x00cer Information")
+
+
+def test_document_structure_aware_caps_oversized_section_at_max_tokens():
+    enc = tiktoken.get_encoding("cl100k_base")
+    huge = " ".join(f"word{i}" for i in range(3000))
+    chunks = chunk_document_structure_aware(page_number=1, text=huge, max_tokens=200)
+
+    assert len(chunks) > 1
+    assert all(len(enc.encode(c.text)) <= 200 for c in chunks)
+    assert "".join(c.text for c in chunks).replace(" ", "") == huge.replace(" ", "")
+
+
+def test_document_structure_aware_without_max_tokens_keeps_oversized_section_whole():
+    huge = " ".join(f"word{i}" for i in range(3000))
+    assert chunk_document_structure_aware(page_number=1, text=huge) == [Chunk(page_number=1, text=huge)]
+
+
+def test_chunk_page_passes_max_tokens_only_to_document_structure_aware():
+    huge = " ".join(f"word{i}" for i in range(3000))
+    capped = chunk_page("document_structure_aware", 1, huge, 1000, 0, max_tokens=200)
+    assert len(capped) > 1
+    assert chunk_page("sliding_window", 1, "short", 1000, 200, max_tokens=200) == chunk_page_text(1, "short", 1000, 200)

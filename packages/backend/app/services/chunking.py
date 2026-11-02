@@ -124,19 +124,25 @@ def _hard_slice_by_tokens(unit: str, chunk_size: int) -> list[str]:
     ]
 
 
+def _units_within(text: str, max_tokens: int) -> list[str]:
+    units: list[str] = []
+    for unit in _split_on_boundaries(text, _RECURSIVE_SEPARATORS, max_tokens):
+        if not unit.strip():
+            continue
+        if _token_len(unit) > max_tokens:
+            units.extend(_hard_slice_by_tokens(unit, max_tokens))
+        else:
+            units.append(unit)
+    return units
+
+
 def chunk_recursive_semantic(
     page_number: int, text: str, chunk_size: int = 512, overlap: int = 0
 ) -> list[Chunk]:
     if not text:
         return []
 
-    raw_units = [u for u in _split_on_boundaries(text, _RECURSIVE_SEPARATORS, chunk_size) if u.strip()]
-    units: list[str] = []
-    for unit in raw_units:
-        if _token_len(unit) > chunk_size:
-            units.extend(_hard_slice_by_tokens(unit, chunk_size))
-        else:
-            units.append(unit)
+    units = _units_within(text, chunk_size)
     if not units:
         return []
 
@@ -207,13 +213,14 @@ def _is_heading(paragraph: str) -> bool:
 
 
 def chunk_document_structure_aware(
-    page_number: int, text: str, chunk_size: int = 0, overlap: int = 0
+    page_number: int, text: str, chunk_size: int = 0, overlap: int = 0,
+    max_tokens: int | None = None,
 ) -> list[Chunk]:
-    """Split on the page's own section/paragraph boundaries, regardless of
-    resulting chunk size -- chunk_size/overlap are accepted only to match
-    the shared chunk_page() signature and don't constrain the output here.
-    Paragraphs are grouped under the heading that precedes them; a page
-    with no detected headings falls back to one chunk per paragraph."""
+    """Split on the page's own section/paragraph boundaries. chunk_size and
+    overlap don't constrain the output; max_tokens (the embedding model's
+    input limit) splits any section that would exceed it. Paragraphs are
+    grouped under the heading that precedes them; a page with no detected
+    headings falls back to one chunk per paragraph."""
     if not text or not text.strip():
         return []
 
@@ -222,18 +229,25 @@ def chunk_document_structure_aware(
         return []
 
     if not any(_is_heading(p) for p in paragraphs):
-        return [Chunk(page_number=page_number, text=p) for p in paragraphs]
-
-    chunk_texts: list[str] = []
-    current: list[str] = []
-    for paragraph in paragraphs:
-        if _is_heading(paragraph) and current:
+        chunk_texts = paragraphs
+    else:
+        chunk_texts = []
+        current: list[str] = []
+        for paragraph in paragraphs:
+            if _is_heading(paragraph) and current:
+                chunk_texts.append("\n\n".join(current))
+                current = [paragraph]
+            else:
+                current.append(paragraph)
+        if current:
             chunk_texts.append("\n\n".join(current))
-            current = [paragraph]
-        else:
-            current.append(paragraph)
-    if current:
-        chunk_texts.append("\n\n".join(current))
+
+    if max_tokens is not None:
+        chunk_texts = [
+            piece
+            for t in chunk_texts
+            for piece in (_units_within(t, max_tokens) if _token_len(t) > max_tokens else [t])
+        ]
 
     return [Chunk(page_number=page_number, text=t) for t in chunk_texts]
 
@@ -287,5 +301,10 @@ _STRATEGY_CHUNKERS = {
 }
 
 
-def chunk_page(strategy: str, page_number: int, text: str, chunk_size: int, overlap: int) -> list[Chunk]:
+def chunk_page(
+    strategy: str, page_number: int, text: str, chunk_size: int, overlap: int,
+    max_tokens: int | None = None,
+) -> list[Chunk]:
+    if strategy == "document_structure_aware":
+        return chunk_document_structure_aware(page_number, text, chunk_size, overlap, max_tokens)
     return _STRATEGY_CHUNKERS[strategy](page_number, text, chunk_size, overlap)
