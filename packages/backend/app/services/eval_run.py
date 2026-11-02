@@ -109,8 +109,8 @@ def _mean_rerank_latency(per_query: list[EvalQueryResult]) -> float | None:
 
 def _total_cost_usd(
     aggregates: dict, n: int,
-    generation_cost_per_1k_in_usd: float, generation_cost_per_1k_out_usd: float,
-    judge_cost_per_1k_in_usd: float, judge_cost_per_1k_out_usd: float,
+    generation_cost_per_1m_in_usd: float, generation_cost_per_1m_out_usd: float,
+    judge_cost_per_1m_in_usd: float, judge_cost_per_1m_out_usd: float,
     local_compute_cost_per_hour: float, chat_provider: str, eval_judge_provider: str,
 ) -> float:
     """A call is priced by tokens (API providers) or by time (local/ollama,
@@ -123,8 +123,8 @@ def _total_cost_usd(
         )
     else:
         generation_cost = (
-            aggregates["total_generation_input_tokens"] / 1000 * generation_cost_per_1k_in_usd
-            + aggregates["total_generation_output_tokens"] / 1000 * generation_cost_per_1k_out_usd
+            aggregates["total_generation_input_tokens"] / 1_000_000 * generation_cost_per_1m_in_usd
+            + aggregates["total_generation_output_tokens"] / 1_000_000 * generation_cost_per_1m_out_usd
         )
     if eval_judge_provider == "ollama":
         eval_cost = (
@@ -132,18 +132,18 @@ def _total_cost_usd(
         )
     else:
         eval_cost = (
-            aggregates["total_eval_input_tokens"] / 1000 * judge_cost_per_1k_in_usd
-            + aggregates["total_eval_output_tokens"] / 1000 * judge_cost_per_1k_out_usd
+            aggregates["total_eval_input_tokens"] / 1_000_000 * judge_cost_per_1m_in_usd
+            + aggregates["total_eval_output_tokens"] / 1_000_000 * judge_cost_per_1m_out_usd
         )
     return generation_cost + eval_cost
 
 
 def _summarize(
     per_query: list[EvalQueryResult],
-    generation_cost_per_1k_in_usd: float = 0.0,
-    generation_cost_per_1k_out_usd: float = 0.0,
-    judge_cost_per_1k_in_usd: float = 0.0,
-    judge_cost_per_1k_out_usd: float = 0.0,
+    generation_cost_per_1m_in_usd: float = 0.0,
+    generation_cost_per_1m_out_usd: float = 0.0,
+    judge_cost_per_1m_in_usd: float = 0.0,
+    judge_cost_per_1m_out_usd: float = 0.0,
     local_compute_cost_per_hour: float = 0.0,
     chat_provider: str = "anthropic",
     eval_judge_provider: str = "openai",
@@ -183,8 +183,8 @@ def _summarize(
         "mean_rerank_latency_ms": _mean_rerank_latency(per_query),
     }
     aggregates["total_cost_usd"] = _total_cost_usd(
-        aggregates, n, generation_cost_per_1k_in_usd, generation_cost_per_1k_out_usd,
-        judge_cost_per_1k_in_usd, judge_cost_per_1k_out_usd, local_compute_cost_per_hour,
+        aggregates, n, generation_cost_per_1m_in_usd, generation_cost_per_1m_out_usd,
+        judge_cost_per_1m_in_usd, judge_cost_per_1m_out_usd, local_compute_cost_per_hour,
         chat_provider, eval_judge_provider,
     )
     return aggregates
@@ -267,8 +267,8 @@ async def run_eval_job(
     combine_calls: bool = True, graph_augmented: bool = False, ner=None,
     recall_k_values: str = "5,10,20,50",
     reranker=None, rerank_candidates: int | None = None,
-    generation_cost_per_1k_in_usd: float = 0.0, generation_cost_per_1k_out_usd: float = 0.0,
-    judge_cost_per_1k_in_usd: float = 0.0, judge_cost_per_1k_out_usd: float = 0.0,
+    generation_cost_per_1m_in_usd: float = 0.0, generation_cost_per_1m_out_usd: float = 0.0,
+    judge_cost_per_1m_in_usd: float = 0.0, judge_cost_per_1m_out_usd: float = 0.0,
     local_compute_cost_per_hour: float = 0.0,
     chat_provider_name: str = "anthropic", eval_judge_provider_name: str = "openai",
     finalize: bool = True,
@@ -461,10 +461,10 @@ async def run_eval_job(
         return
     job.aggregates = _summarize(
         job.per_query,
-        generation_cost_per_1k_in_usd=generation_cost_per_1k_in_usd,
-        generation_cost_per_1k_out_usd=generation_cost_per_1k_out_usd,
-        judge_cost_per_1k_in_usd=judge_cost_per_1k_in_usd,
-        judge_cost_per_1k_out_usd=judge_cost_per_1k_out_usd,
+        generation_cost_per_1m_in_usd=generation_cost_per_1m_in_usd,
+        generation_cost_per_1m_out_usd=generation_cost_per_1m_out_usd,
+        judge_cost_per_1m_in_usd=judge_cost_per_1m_in_usd,
+        judge_cost_per_1m_out_usd=judge_cost_per_1m_out_usd,
         local_compute_cost_per_hour=local_compute_cost_per_hour,
         chat_provider=chat_provider_name, eval_judge_provider=eval_judge_provider_name,
     )

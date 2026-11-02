@@ -18,13 +18,13 @@ class MeteredProvider:
 
     def __init__(
         self, inner, db, provider_name: str, model: str,
-        local_in_per_1k: float = 0.0, local_out_per_1k: float = 0.0,
+        local_in_per_1m: float = 0.0, local_out_per_1m: float = 0.0,
     ):
         self._inner = inner
         self._db = db
         self._provider_name = provider_name
         self._model = model
-        self._local_rates = (local_in_per_1k, local_out_per_1k)
+        self._local_rates = (local_in_per_1m, local_out_per_1m)
 
     async def complete(self, prompt: str):
         response = await self._inner.complete(prompt)

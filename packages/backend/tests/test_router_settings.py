@@ -6,7 +6,7 @@ from app.routing.from_settings import static_strategy_from_settings, tiers_from_
 from app.routing.router import RoutingRequest, TaskType
 
 TIERS = [
-    {"name": "small", "model": "m-7b", "base_url": "http://gw/v1", "cost_per_1k_in": 0.1},
+    {"name": "small", "model": "m-7b", "base_url": "http://gw/v1", "cost_per_1m_in": 0.1},
     {"name": "large", "model": "m-70b", "base_url": "http://gw/v1", "temperature": 0.2},
 ]
 
@@ -25,7 +25,7 @@ def test_tiers_load_and_convert():
     s = _settings(router_tiers=TIERS, router_fallback_tier="large",
                   router_task_tiers={"extraction": "small"})
     small, large = tiers_from_settings(s)
-    assert (small.name, small.model, small.cost_per_1k_in) == ("small", "m-7b", 0.1)
+    assert (small.name, small.model, small.cost_per_1m_in) == ("small", "m-7b", 0.1)
     assert large.temperature == 0.2 and large.api_key is None
 
 

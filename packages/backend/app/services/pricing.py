@@ -10,10 +10,10 @@ MODEL_PRICES_PER_1M: dict[tuple[str, str], tuple[float, float]] = {
 
 def token_cost_usd(
     provider: str, model: str, input_tokens: int, output_tokens: int,
-    local_in_per_1k: float = 0.0, local_out_per_1k: float = 0.0,
+    local_in_per_1m: float = 0.0, local_out_per_1m: float = 0.0,
 ) -> float | None:
     if provider == "ollama":
-        return input_tokens / 1000 * local_in_per_1k + output_tokens / 1000 * local_out_per_1k
+        return input_tokens / 1_000_000 * local_in_per_1m + output_tokens / 1_000_000 * local_out_per_1m
     price = MODEL_PRICES_PER_1M.get((provider, model))
     if price is None:
         return None

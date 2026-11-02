@@ -38,8 +38,8 @@ class Tier:
     base_url: str
     api_key: str | None = None
     temperature: float = 0.0
-    cost_per_1k_in: float = 0.0
-    cost_per_1k_out: float = 0.0
+    cost_per_1m_in: float = 0.0
+    cost_per_1m_out: float = 0.0
 
 
 @dataclass
@@ -200,6 +200,6 @@ class DynamicRouter:
 
 def _cost(tier: Tier, response: LLMResponse) -> float:
     return (
-        (response.input_tokens or 0) / 1000 * tier.cost_per_1k_in
-        + (response.output_tokens or 0) / 1000 * tier.cost_per_1k_out
+        (response.input_tokens or 0) / 1_000_000 * tier.cost_per_1m_in
+        + (response.output_tokens or 0) / 1_000_000 * tier.cost_per_1m_out
     )

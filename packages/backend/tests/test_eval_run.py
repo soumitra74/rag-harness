@@ -445,14 +445,14 @@ def test_summarize_includes_total_cost_usd_for_api_providers():
 
     result = _summarize(
         per_query,
-        generation_cost_per_1k_in_usd=0.003, generation_cost_per_1k_out_usd=0.015,
-        judge_cost_per_1k_in_usd=0.0005, judge_cost_per_1k_out_usd=0.0015,
+        generation_cost_per_1m_in_usd=3.0, generation_cost_per_1m_out_usd=15.0,
+        judge_cost_per_1m_in_usd=0.5, judge_cost_per_1m_out_usd=1.5,
         local_compute_cost_per_hour=0.0,
         chat_provider="anthropic", eval_judge_provider="openai",
     )
 
-    expected_generation = 3000 / 1000 * 0.003 + 500 / 1000 * 0.015
-    expected_eval = 1100 / 1000 * 0.0005 + 250 / 1000 * 0.0015
+    expected_generation = 3000 / 1_000_000 * 3.0 + 500 / 1_000_000 * 15.0
+    expected_eval = 1100 / 1_000_000 * 0.5 + 250 / 1_000_000 * 1.5
     assert result["total_cost_usd"] == pytest.approx(expected_generation + expected_eval, rel=1e-9)
 
 
@@ -464,15 +464,15 @@ def test_summarize_approximates_local_generation_cost_by_time_not_tokens():
 
     result = _summarize(
         per_query,
-        generation_cost_per_1k_in_usd=0.003, generation_cost_per_1k_out_usd=0.015,
-        judge_cost_per_1k_in_usd=0.0005, judge_cost_per_1k_out_usd=0.0015,
+        generation_cost_per_1m_in_usd=3.0, generation_cost_per_1m_out_usd=15.0,
+        judge_cost_per_1m_in_usd=0.5, judge_cost_per_1m_out_usd=1.5,
         local_compute_cost_per_hour=3600.0,
         chat_provider="ollama", eval_judge_provider="openai",
     )
 
     mean_generation_latency_ms = (1800 + 2200) / 2
     expected_generation = mean_generation_latency_ms * 2 / 1000 / 3600 * 3600.0
-    expected_eval = 1100 / 1000 * 0.0005 + 250 / 1000 * 0.0015
+    expected_eval = 1100 / 1_000_000 * 0.5 + 250 / 1_000_000 * 1.5
     assert result["total_cost_usd"] == pytest.approx(expected_generation + expected_eval, rel=1e-9)
 
 

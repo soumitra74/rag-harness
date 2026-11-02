@@ -15,8 +15,8 @@ from app.routing.router import (
     Tier,
 )
 
-SMALL = Tier("small", "m-7b", "http://gw/v1", cost_per_1k_in=1.0, cost_per_1k_out=2.0)
-LARGE = Tier("large", "m-70b", "http://gw/v1", cost_per_1k_in=10.0, cost_per_1k_out=20.0)
+SMALL = Tier("small", "m-7b", "http://gw/v1", cost_per_1m_in=1.0, cost_per_1m_out=2.0)
+LARGE = Tier("large", "m-70b", "http://gw/v1", cost_per_1m_in=10.0, cost_per_1m_out=20.0)
 
 
 class FakeClient:
@@ -55,7 +55,7 @@ async def test_static_table_routes_by_task_and_records_cost():
     assert out.tier == "small" and not out.escalated
     [rec] = out.records
     assert rec.reason == "table: extraction"
-    assert rec.cost == pytest.approx(1.0 + 1.0)  # 1k in * 1.0 + 0.5k out * 2.0
+    assert rec.cost == pytest.approx(1000 / 1e6 * 1.0 + 500 / 1e6 * 2.0)
 
 
 @pytest.mark.asyncio

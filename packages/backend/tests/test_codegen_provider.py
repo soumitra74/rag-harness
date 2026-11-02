@@ -1,3 +1,5 @@
+import pytest
+
 from app.config import Settings
 from app.services.judge import OllamaCompletionProvider, OpenAICompletionProvider, get_codegen_provider
 
@@ -35,7 +37,7 @@ def test_anthropic_text_skips_thinking_blocks():
 def test_token_cost_uses_env_rates_only_for_ollama():
     from app.services.pricing import token_cost_usd
 
-    assert token_cost_usd("ollama", "gpt-oss:20b", 2000, 1000, 0.5, 1.0) == 2.0
+    assert token_cost_usd("ollama", "gpt-oss:20b", 2000, 1000, 500.0, 1000.0) == pytest.approx(2.0)
 
 
 def test_token_cost_for_cloud_model_uses_price_table_and_unknown_is_none(monkeypatch):

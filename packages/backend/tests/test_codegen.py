@@ -55,7 +55,7 @@ class FakeNER:
 def _ctx(ner=None):
     return CodegenContext(
         settings=SimpleNamespace(
-            corpus_dir="unused", judge_cost_per_1k_in_usd=0.0, judge_cost_per_1k_out_usd=0.0,
+            corpus_dir="unused", judge_cost_per_1m_in_usd=0.0, judge_cost_per_1m_out_usd=0.0,
             codegen_debug=False, codegen_provider=None, codegen_model=None,
             generated_dir=str(Path(tempfile.gettempdir()) / "codegen-tests"),
             eval_judge_provider="openai", eval_judge_model="gpt-6-luna",

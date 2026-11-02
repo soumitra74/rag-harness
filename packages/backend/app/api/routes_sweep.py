@@ -78,7 +78,7 @@ def _get_provider(request: Request):
         request.app.state.sweep_provider = MeteredProvider(
             get_completion_provider(settings), request.app.state.db,
             settings.eval_judge_provider, settings.eval_judge_model,
-            settings.judge_cost_per_1k_in_usd, settings.judge_cost_per_1k_out_usd,
+            settings.judge_cost_per_1m_in_usd, settings.judge_cost_per_1m_out_usd,
         )
     return request.app.state.sweep_provider
 
@@ -111,7 +111,7 @@ def _get_codegen_provider(request: Request):
         get_codegen_provider(settings), request.app.state.db,
         settings.codegen_provider or settings.eval_judge_provider,
         settings.codegen_model or settings.eval_judge_model,
-        settings.judge_cost_per_1k_in_usd, settings.judge_cost_per_1k_out_usd,
+        settings.judge_cost_per_1m_in_usd, settings.judge_cost_per_1m_out_usd,
     )
 
 

@@ -12,8 +12,8 @@ class TierSettings(BaseModel):
     base_url: str
     api_key: str | None = None
     temperature: float = 0.0
-    cost_per_1k_in: float = 0.0
-    cost_per_1k_out: float = 0.0
+    cost_per_1m_in: float = 0.0
+    cost_per_1m_out: float = 0.0
 
 
 class Settings(BaseSettings):
@@ -104,10 +104,10 @@ class Settings(BaseSettings):
     # All default to 0.0 (free) until configured; an "ollama"/local provider
     # is priced via local_compute_cost_per_hour instead of the *_in/out
     # rates, approximated from call latency rather than token counts.
-    generation_cost_per_1k_in_usd: float = 0.0
-    generation_cost_per_1k_out_usd: float = 0.0
-    judge_cost_per_1k_in_usd: float = 0.0
-    judge_cost_per_1k_out_usd: float = 0.0
+    generation_cost_per_1m_in_usd: float = 0.0
+    generation_cost_per_1m_out_usd: float = 0.0
+    judge_cost_per_1m_in_usd: float = 0.0
+    judge_cost_per_1m_out_usd: float = 0.0
     local_compute_cost_per_hour: float = 0.0
 
     # Pass/fail thresholds the history endpoint checks each completed
