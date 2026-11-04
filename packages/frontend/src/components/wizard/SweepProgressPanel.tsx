@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSweep, resumeSweep, type Sweep } from "../../api/client";
 
-const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 10_000;
 const TERMINAL_STATUSES = new Set(["stopped_budget", "stopped_optimal"]);
 
 interface SweepProgressPanelProps {
