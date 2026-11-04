@@ -37,6 +37,11 @@ class FakeDatabase(CodegenFakeMethods):
         self._sweeps[sweep_id]["status"] = status
         self._sweeps[sweep_id]["error_message"] = error_message
 
+    async def update_sweep_budgets(self, sweep_id, ingestion_budget, eval_budget):
+        sweep = self._sweeps[sweep_id]
+        sweep["ingestion_budget"] = {**sweep["ingestion_budget"], **(ingestion_budget or {})}
+        sweep["eval_budget"] = {**sweep["eval_budget"], **(eval_budget or {})}
+
     async def list_sweep_configs(self, sweep_id):
         return self._sweep_configs.get(sweep_id, [])
 
@@ -313,3 +318,31 @@ def test_latest_sweep_returns_null_when_no_sweeps(monkeypatch):
     client = _client(monkeypatch, EmptyDb())
 
     assert client.get("/api/sweep/latest").json() is None
+
+
+def test_update_budget_merges_patch_into_existing_budget(monkeypatch):
+    client = _client(monkeypatch)
+    client.post("/api/sweep/start", json=VALID_START_BODY)
+
+    response = client.post("/api/sweep/1/budget", json={"eval_budget": {"minutes": 600}})
+
+    assert response.status_code == 200
+    assert response.json()["eval_budget"] == {"cost_usd": 10, "minutes": 600, "iterations": 50}
+    assert response.json()["ingestion_budget"] == VALID_START_BODY["ingestion_budget"]
+
+
+def test_update_budget_rejects_non_positive_value(monkeypatch):
+    client = _client(monkeypatch)
+    client.post("/api/sweep/start", json=VALID_START_BODY)
+
+    response = client.post("/api/sweep/1/budget", json={"eval_budget": {"minutes": 0}})
+
+    assert response.status_code == 400
+
+
+def test_update_budget_rejects_unknown_sweep(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.post("/api/sweep/99/budget", json={"eval_budget": {"minutes": 600}})
+
+    assert response.status_code == 404

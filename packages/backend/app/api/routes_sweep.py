@@ -28,6 +28,17 @@ class BudgetInput(BaseModel):
     iterations: float
 
 
+class BudgetPatch(BaseModel):
+    cost_usd: float | None = None
+    minutes: float | None = None
+    iterations: float | None = None
+
+
+class BudgetUpdateRequest(BaseModel):
+    ingestion_budget: BudgetPatch | None = None
+    eval_budget: BudgetPatch | None = None
+
+
 class CodegenInput(BaseModel):
     cost_usd: float
     minutes: float
@@ -198,6 +209,33 @@ async def get_sweep(request: Request, sweep_id: int):
         for sc in sweep_configs
     ]
     return result
+
+
+@router.post("/api/sweep/{sweep_id}/budget")
+async def update_sweep_budget(request: Request, sweep_id: int, body: BudgetUpdateRequest):
+    db = request.app.state.db
+    sweep = await db.get_sweep(sweep_id)
+    if sweep is None:
+        raise HTTPException(status_code=404, detail=f"Unknown sweep: {sweep_id}")
+    if body.ingestion_budget is None and body.eval_budget is None:
+        raise HTTPException(status_code=400, detail="Provide ingestion_budget and/or eval_budget")
+
+    patches = {
+        "ingestion_budget": body.ingestion_budget.model_dump(exclude_none=True) if body.ingestion_budget else None,
+        "eval_budget": body.eval_budget.model_dump(exclude_none=True) if body.eval_budget else None,
+    }
+    for label, patch in patches.items():
+        for axis, value in (patch or {}).items():
+            if value <= 0:
+                raise HTTPException(status_code=400, detail=f"{label}.{axis} must be greater than 0")
+
+    await db.update_sweep_budgets(sweep_id, patches["ingestion_budget"], patches["eval_budget"])
+    updated = await db.get_sweep(sweep_id)
+    return {
+        "sweep_id": sweep_id,
+        "ingestion_budget": updated["ingestion_budget"],
+        "eval_budget": updated["eval_budget"],
+    }
 
 
 @router.post("/api/sweep/{sweep_id}/approve")

@@ -930,6 +930,18 @@ class Database:
                 status, error_message, sweep_id,
             )
 
+    async def update_sweep_budgets(
+        self, sweep_id: int, ingestion_budget: dict | None, eval_budget: dict | None,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE sweeps SET "
+                "ingestion_budget = COALESCE(ingestion_budget, '{}'::jsonb) || $1::jsonb, "
+                "eval_budget = COALESCE(eval_budget, '{}'::jsonb) || $2::jsonb "
+                "WHERE id = $3",
+                json.dumps(ingestion_budget or {}), json.dumps(eval_budget or {}), sweep_id,
+            )
+
     async def finalize_sweep(
         self, sweep_id: int, status: str, summary_markdown: str,
         best_config_id: int | None, best_score: float | None,
