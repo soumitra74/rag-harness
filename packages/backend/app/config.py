@@ -108,6 +108,8 @@ class Settings(BaseSettings):
     generation_cost_per_1m_out_usd: float = 0.0
     judge_cost_per_1m_in_usd: float = 0.0
     judge_cost_per_1m_out_usd: float = 0.0
+    codegen_cost_per_1m_in_usd: float = 0.0
+    codegen_cost_per_1m_out_usd: float = 0.0
     local_compute_cost_per_hour: float = 0.0
 
     # Pass/fail thresholds the history endpoint checks each completed

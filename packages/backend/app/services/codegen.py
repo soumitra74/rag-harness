@@ -235,7 +235,7 @@ def _codegen_cost(settings, response) -> float | None:
     model = settings.codegen_model or settings.eval_judge_model
     return token_cost_usd(
         provider, model, response.input_tokens or 0, response.output_tokens or 0,
-        settings.generation_cost_per_1m_in_usd, settings.generation_cost_per_1m_out_usd,
+        settings.codegen_cost_per_1m_in_usd, settings.codegen_cost_per_1m_out_usd,
     )
 
 
