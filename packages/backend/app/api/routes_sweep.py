@@ -9,6 +9,7 @@ from app.services.codegen import CODEGEN_AXES, reset_graph_labels
 from app.services.judge import create_judge, get_codegen_provider, get_completion_provider
 from app.services.sweep_log import MeteredProvider
 from app.services.sweep import (
+    INNER_GRID,
     apply_user_suggestion,
     finalize_sweep_run,
     list_pdf_filenames,
@@ -235,6 +236,56 @@ async def update_sweep_budget(request: Request, sweep_id: int, body: BudgetUpdat
         "sweep_id": sweep_id,
         "ingestion_budget": updated["ingestion_budget"],
         "eval_budget": updated["eval_budget"],
+    }
+
+
+def _budget_usage(spent: dict, budget: dict) -> dict:
+    return {
+        "cost_used_usd": round(spent.get("cost_usd", 0.0), 4),
+        "cost_cap_usd": budget.get("cost_usd"),
+        "minutes_used": round(spent.get("minutes", 0.0), 1),
+        "minutes_cap": budget.get("minutes"),
+        "iterations_used": spent.get("iterations", 0),
+        "iterations_cap": budget.get("iterations"),
+    }
+
+
+@router.get("/api/sweep/{sweep_id}/progress")
+async def get_sweep_progress(request: Request, sweep_id: int):
+    db = request.app.state.db
+    sweep = await db.get_sweep(sweep_id)
+    if sweep is None:
+        raise HTTPException(status_code=404, detail=f"Unknown sweep: {sweep_id}")
+
+    configs = await db.list_sweep_configs(sweep_id)
+    in_progress = [c for c in configs if c["status"] != "evaluated"]
+    current = in_progress[-1] if in_progress else None
+    latest_cycle = await db.latest_sweep_eval_cycle(sweep_id)
+
+    return {
+        "sweep_id": sweep_id,
+        "status": sweep["status"],
+        "resumable": sweep["status"] in ("paused", "failed"),
+        "configs_evaluated": sum(1 for c in configs if c["status"] == "evaluated"),
+        "current_config": None if current is None else {
+            "config_id": current["config_id"],
+            "status": current["status"],
+            "combos_done": len(current["evaluated_combos"]),
+            "combos_total": len(INNER_GRID),
+        },
+        "latest_eval_cycle": None if latest_cycle is None else {
+            "id": latest_cycle["id"],
+            "config_id": latest_cycle["config_id"],
+            "questions_written": latest_cycle["questions_written"],
+            "questions_total": latest_cycle["total"],
+            "completed": latest_cycle["completed_at"] is not None,
+        },
+        "budgets": {
+            "ingestion": _budget_usage(
+                await db.sum_ingestion_spend(sweep_id), sweep["ingestion_budget"],
+            ),
+            "eval": _budget_usage(await db.sum_eval_spend(sweep_id), sweep["eval_budget"]),
+        },
     }
 
 

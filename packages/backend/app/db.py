@@ -1089,6 +1089,21 @@ class Database:
                 "iterations": row["iterations"],
             }
 
+    async def latest_sweep_eval_cycle(self, sweep_id: int) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT ec.id, ec.config_id, ec.total, ec.completed_at,
+                       (SELECT COUNT(*) FROM eval_runs er WHERE er.cycle_id = ec.id)
+                           AS questions_written
+                FROM eval_cycles ec
+                WHERE ec.sweep_id = $1
+                ORDER BY ec.id DESC LIMIT 1
+                """,
+                sweep_id,
+            )
+            return dict(row) if row else None
+
     async def list_chunk_tables(self) -> list[str]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(

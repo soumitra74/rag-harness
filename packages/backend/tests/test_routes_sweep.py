@@ -51,6 +51,9 @@ class FakeDatabase(CodegenFakeMethods):
     async def sum_eval_spend(self, sweep_id):
         return {"cost_usd": 0.0, "minutes": 0.0, "iterations": 0}
 
+    async def latest_sweep_eval_cycle(self, sweep_id):
+        return getattr(self, "latest_cycle", None)
+
 
 async def _noop(*args, **kwargs):
     return None
@@ -344,5 +347,57 @@ def test_update_budget_rejects_unknown_sweep(monkeypatch):
     client = _client(monkeypatch)
 
     response = client.post("/api/sweep/99/budget", json={"eval_budget": {"minutes": 600}})
+
+    assert response.status_code == 404
+
+
+def test_progress_reports_current_config_and_latest_cycle(monkeypatch):
+    db = FakeDatabase()
+    client = _client(monkeypatch, db=db)
+    client.post("/api/sweep/start", json=VALID_START_BODY)
+    db._sweep_configs[1] = [
+        {"config_id": 1, "status": "evaluated", "evaluated_combos": [0, 1, 2, 3, 4, 5, 6, 7]},
+        {"config_id": 2, "status": "proposed", "evaluated_combos": [0, 1, 2]},
+    ]
+    db.latest_cycle = {
+        "id": 9, "config_id": 2, "total": 20,
+        "completed_at": None, "questions_written": 11,
+    }
+
+    response = client.get("/api/sweep/1/progress")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["configs_evaluated"] == 1
+    assert body["current_config"] == {
+        "config_id": 2, "status": "proposed", "combos_done": 3,
+        "combos_total": len(routes_sweep.INNER_GRID),
+    }
+    assert body["latest_eval_cycle"] == {
+        "id": 9, "config_id": 2, "questions_written": 11,
+        "questions_total": 20, "completed": False,
+    }
+    assert body["budgets"]["ingestion"]["minutes_cap"] == 60
+    assert body["budgets"]["ingestion"]["cost_cap_usd"] == 10
+    assert body["budgets"]["eval"]["iterations_cap"] == 50
+
+
+def test_progress_with_no_configs_or_cycles(monkeypatch):
+    client = _client(monkeypatch)
+    client.post("/api/sweep/start", json=VALID_START_BODY)
+
+    response = client.get("/api/sweep/1/progress")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["current_config"] is None
+    assert body["latest_eval_cycle"] is None
+    assert body["configs_evaluated"] == 0
+
+
+def test_progress_unknown_sweep_returns_404(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.get("/api/sweep/99/progress")
 
     assert response.status_code == 404
