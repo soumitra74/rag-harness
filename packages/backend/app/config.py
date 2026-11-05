@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://ollama:11444"
     ollama_chat_model: str = "llama3.2"
     ollama_embedding_model: str = "nomic-embed-text"
+    ollama_embedding_concurrency: int = 4
     # Ollama's default context window (~2048 tokens for most models) is
     # smaller than a top_k=10 prompt can need, and /api/generate silently
     # truncates instead of erroring when a prompt exceeds it -- discovered
