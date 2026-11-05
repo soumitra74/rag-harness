@@ -11,6 +11,7 @@ import { IngestionHistoryPanel } from "./components/IngestionHistoryPanel";
 import { IngestionPanel } from "./components/IngestionPanel";
 import { RCAPanel } from "./components/RCAPanel";
 import { RevalPanel } from "./components/RevalPanel";
+import { SweepStatusPanel } from "./components/SweepStatusPanel";
 import { SweepWizard } from "./components/SweepWizard";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8089";
@@ -26,6 +27,7 @@ const TABS = [
   { id: "eval-history", label: "Eval History" },
   { id: "eval-compare", label: "Compare Evals" },
   { id: "rca", label: "RCA" },
+  { id: "sweep-status", label: "Sweep Status" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -135,6 +137,7 @@ function App() {
             {activeTab === "eval-history" && <EvalHistoryPanel />}
             {activeTab === "eval-compare" && <EvalComparePanel />}
             {activeTab === "rca" && <RCAPanel />}
+            {activeTab === "sweep-status" && <SweepStatusPanel />}
           </div>
         </>
       )}

@@ -719,6 +719,58 @@ export async function getLatestSweep(): Promise<LatestSweep | null> {
   return res.json();
 }
 
+export interface SweepBudgetUsage {
+  cost_used_usd: number;
+  cost_cap_usd: number | null;
+  minutes_used: number;
+  minutes_cap: number | null;
+  iterations_used: number;
+  iterations_cap: number | null;
+}
+
+export interface SweepProgress {
+  sweep_id: number;
+  status: string;
+  resumable: boolean;
+  configs_evaluated: number;
+  current_config: {
+    config_id: number;
+    status: string;
+    combos_done: number;
+    combos_total: number;
+  } | null;
+  latest_eval_cycle: {
+    id: number;
+    config_id: number;
+    questions_written: number;
+    questions_total: number;
+    completed: boolean;
+  } | null;
+  budgets: { ingestion: SweepBudgetUsage; eval: SweepBudgetUsage };
+}
+
+export interface SweepSummary {
+  sweep_id: number;
+  status: string;
+  created_at: string;
+}
+
+export async function listSweeps(): Promise<SweepSummary[]> {
+  const res = await fetch(`${API_BASE_URL}/api/sweeps`);
+  if (!res.ok) {
+    throw new Error(await parseErrorDetail(res, `Failed to list sweeps (${res.status})`));
+  }
+  return res.json();
+}
+
+export async function getSweepProgress(sweepId: number): Promise<SweepProgress> {
+  const res = await fetch(`${API_BASE_URL}/api/sweep/${sweepId}/progress`);
+  if (!res.ok) {
+    throw new Error(await parseErrorDetail(res, `Failed to get sweep progress (${res.status})`));
+  }
+  return res.json();
+}
+
 export async function resumeSweep(sweepId: number): Promise<{ status: string }> {
   const res = await fetch(`${API_BASE_URL}/api/sweep/${sweepId}/resume`, { method: "POST" });
   if (!res.ok) {
