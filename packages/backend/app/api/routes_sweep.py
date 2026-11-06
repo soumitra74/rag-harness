@@ -3,9 +3,10 @@ import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.codegen import CODEGEN_AXES, reset_graph_labels
+from app.services.golden_qa_generator import MIN_GOLDEN_QA_SIZE
 from app.services.judge import (
     create_judge, get_codegen_provider, get_completion_provider, get_golden_qa_provider,
     get_golden_qa_verifier_provider,
@@ -54,6 +55,7 @@ class StartSweepRequest(BaseModel):
     ingestion_budget: BudgetInput
     eval_budget: BudgetInput
     generate_golden_qa: bool = False
+    golden_qa_size: int = Field(default=MIN_GOLDEN_QA_SIZE, ge=MIN_GOLDEN_QA_SIZE)
     codegen: CodegenInput | None = None
 
 
@@ -163,6 +165,7 @@ def _bootstrap_coroutine(request: Request, sweep: dict):
         codegen_provider=_get_codegen_provider(request) if codegen_tasks else None,
         golden_qa_provider=_get_golden_qa_provider(request) if generate_golden_qa else None,
         golden_qa_verifier_provider=_get_golden_qa_verifier_provider(request) if generate_golden_qa else None,
+        golden_qa_size=options.get("golden_qa_size", MIN_GOLDEN_QA_SIZE),
     )
 
 
@@ -182,6 +185,7 @@ async def start_sweep(request: Request, body: StartSweepRequest):
     db = request.app.state.db
     bootstrap_options = {
         "generate_golden_qa": body.generate_golden_qa,
+        "golden_qa_size": body.golden_qa_size,
         "codegen_tasks": body.codegen.tasks if body.codegen else None,
     }
     sweep_id = await db.create_sweep(

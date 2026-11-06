@@ -10,6 +10,7 @@ LONG_TEXT = "Synthetic data supports fraud detection research. " * 10
 
 
 VERIFY_MARKER = '"supported"'
+CLOSED_BOOK_MARKER = '"answerable_without_document"'
 
 
 def _next(queue: list[str]) -> str:
@@ -17,14 +18,20 @@ def _next(queue: list[str]) -> str:
 
 
 class FakeProvider:
-    def __init__(self, responses, verdicts=None):
+    def __init__(self, responses, verdicts=None, closed_book=None):
         self._responses = list(responses)
         self._verdicts = list(verdicts) if verdicts is not None else [_verdict(True)]
+        self._closed_book = list(closed_book) if closed_book is not None else [_closed_book(False)]
         self.prompts = []
 
     async def complete(self, prompt: str) -> LLMResponse:
         self.prompts.append(prompt)
-        queue = self._verdicts if VERIFY_MARKER in prompt else self._responses
+        if VERIFY_MARKER in prompt:
+            queue = self._verdicts
+        elif CLOSED_BOOK_MARKER in prompt:
+            queue = self._closed_book
+        else:
+            queue = self._responses
         return LLMResponse(text=_next(queue), input_tokens=10, output_tokens=10)
 
 
@@ -35,6 +42,10 @@ def _answer(question="What is X?", answer="X is Y.", query_type="extractive", **
 
 def _verdict(supported, quote="Synthetic data supports fraud detection research."):
     return json.dumps({"supported": supported, "quote": quote})
+
+
+def _closed_book(answerable):
+    return json.dumps({"answerable_without_document": answerable})
 
 
 def _patch_pages(monkeypatch, pages_by_file):
@@ -52,7 +63,7 @@ async def test_generate_golden_qa_writes_one_entry_per_sampled_page(tmp_path, mo
     _corpus(tmp_path, ["doc1.pdf"])
     _patch_pages(monkeypatch, {"doc1.pdf": [(1, LONG_TEXT), (2, LONG_TEXT)]})
     output_path = tmp_path / "golden_qa.json"
-    provider = FakeProvider([_answer(question="Q?")])
+    provider = FakeProvider([_answer(question="Q1?"), _answer(question="Q2?")])
 
     count = await generate_golden_qa(provider, str(tmp_path), str(output_path), num_questions=2)
 
@@ -60,7 +71,8 @@ async def test_generate_golden_qa_writes_one_entry_per_sampled_page(tmp_path, mo
     written = json.loads(output_path.read_text(encoding="utf-8"))
     assert sorted(e["golden_pages"][0]["page"] for e in written) == [1, 2]
     assert all(e["golden_pages"][0]["document"] == "doc1.pdf" for e in written)
-    assert all(e["question"] == "Q?" and e["query_type"] == "extractive" for e in written)
+    assert sorted(e["question"] for e in written) == ["Q1?", "Q2?"]
+    assert all(e["query_type"] == "extractive" for e in written)
 
 
 @pytest.mark.asyncio
@@ -108,7 +120,7 @@ async def test_sample_spreads_across_pages_instead_of_title_page(tmp_path, monke
     _corpus(tmp_path, ["doc1.pdf"])
     _patch_pages(monkeypatch, {"doc1.pdf": [(n, LONG_TEXT) for n in range(1, 11)]})
     output_path = tmp_path / "golden_qa.json"
-    provider = FakeProvider([_answer()])
+    provider = FakeProvider([_answer(question="Q1?"), _answer(question="Q2?")])
 
     await generate_golden_qa(provider, str(tmp_path), str(output_path), num_questions=2)
 
@@ -127,7 +139,7 @@ async def test_sample_skips_pages_without_enough_text(tmp_path, monkeypatch):
 
     written = json.loads(output_path.read_text(encoding="utf-8"))
     assert [e["golden_pages"][0]["page"] for e in written] == [2]
-    assert len(provider.prompts) == 2
+    assert len(provider.prompts) == 3
     assert "Document: doc1.pdf, page 2" in provider.prompts[0]
 
 
@@ -214,4 +226,66 @@ async def test_verification_runs_on_the_verifier_not_the_generator(tmp_path, mon
 
     assert count == 1
     assert len(generator.prompts) == 1 and VERIFY_MARKER not in generator.prompts[0]
-    assert len(verifier.prompts) == 1 and VERIFY_MARKER in verifier.prompts[0]
+    assert len(verifier.prompts) == 2 and VERIFY_MARKER in verifier.prompts[0]
+    assert CLOSED_BOOK_MARKER in verifier.prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_closed_book_answerable_questions_are_rejected(tmp_path, monkeypatch):
+    _corpus(tmp_path, ["doc1.pdf"])
+    _patch_pages(monkeypatch, {"doc1.pdf": [(1, LONG_TEXT)]})
+    output_path = tmp_path / "golden_qa.json"
+    provider = FakeProvider([_answer()], closed_book=[_closed_book(True)])
+
+    with pytest.raises(GoldenQAGenerationError, match="0 of 1 candidate"):
+        await generate_golden_qa(provider, str(tmp_path), str(output_path), num_questions=1)
+
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_closed_book_check_drops_unparseable_answers(tmp_path, monkeypatch):
+    _corpus(tmp_path, ["doc1.pdf"])
+    _patch_pages(monkeypatch, {"doc1.pdf": [(1, LONG_TEXT)]})
+    output_path = tmp_path / "golden_qa.json"
+    provider = FakeProvider([_answer()], closed_book=["I am not sure."])
+
+    with pytest.raises(GoldenQAGenerationError):
+        await generate_golden_qa(provider, str(tmp_path), str(output_path), num_questions=1)
+
+
+@pytest.mark.asyncio
+async def test_repeated_questions_are_generated_and_verified_once(tmp_path, monkeypatch):
+    _corpus(tmp_path, ["doc1.pdf"])
+    _patch_pages(monkeypatch, {"doc1.pdf": [(1, LONG_TEXT), (2, LONG_TEXT)]})
+    output_path = tmp_path / "golden_qa.json"
+    provider = FakeProvider([_answer(question="Same question?"), _answer(question="Same question??")])
+
+    count = await generate_golden_qa(provider, str(tmp_path), str(output_path), num_questions=2)
+
+    assert count == 1
+    verify_prompts = [p for p in provider.prompts if VERIFY_MARKER in p]
+    assert len(verify_prompts) == 1
+
+
+def _entry(entry_id="q1", question="What is X?", pages=None):
+    return {"id": entry_id, "question": question, "reference_answer": "X is Y.", "query_type": "extractive",
+            "golden_pages": pages if pages is not None else [{"document": "doc1.pdf", "page": 1}]}
+
+
+@pytest.mark.parametrize("entries, expected", [
+    ([_entry()], []),
+    ([_entry(pages=[{"document": "missing.pdf", "page": 1}])], ["unknown document 'missing.pdf'"]),
+    ([_entry(pages=[{"document": "doc1.pdf", "page": 9}])], ["page 9 out of range"]),
+    ([_entry(pages=[{"document": "doc1.pdf", "page": 2}])], ["page 2 of 'doc1.pdf' has no usable text"]),
+    ([_entry(pages=[])], ["no golden pages"]),
+    ([_entry("q1"), _entry("q2", question="what is x")], ["duplicate question"]),
+])
+def test_check_golden_entries_reports_structural_problems(entries, expected):
+    documents = {"doc1.pdf": [(1, LONG_TEXT), (2, "short")]}
+
+    problems = golden_qa_generator.check_golden_entries(entries, documents)
+
+    assert len(problems) == len(expected)
+    for needle, problem in zip(expected, problems):
+        assert needle in problem

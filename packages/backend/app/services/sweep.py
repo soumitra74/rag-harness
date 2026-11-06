@@ -16,7 +16,10 @@ from app.services.codegen import (
 )
 from app.services.corpus_inspector import CorpusInspectionError, inspect_corpus
 from app.services.eval_run import load_golden_dataset, new_eval_job, run_eval_job
-from app.services.golden_qa_generator import GoldenQAGenerationError, generate_golden_qa
+from app.services.golden_qa_generator import (
+    MIN_GOLDEN_QA_SIZE, GoldenQAGenerationError, check_golden_entries, generate_golden_qa,
+    load_corpus_pages,
+)
 from app.services.graph_backfill import backfill_graph_for_config
 from app.services.ingest import ingest_pdf, record_ingestion_metrics
 from app.services.quality_gate import load_quality_gate
@@ -57,7 +60,9 @@ def list_pdf_filenames(corpus_dir: str) -> list[str]:
     return sorted(p.name for p in path.glob("*.pdf"))
 
 
-async def _ensure_golden_qa(provider, settings, generate_golden_qa_flag: bool, verifier=None) -> None:
+async def _ensure_golden_qa(
+    provider, settings, generate_golden_qa_flag: bool, verifier=None, num_questions: int = MIN_GOLDEN_QA_SIZE,
+) -> None:
     path = Path(settings.eval_dataset_path)
     if path.exists():
         entries = json.loads(path.read_text(encoding="utf-8"))
@@ -67,9 +72,18 @@ async def _ensure_golden_qa(provider, settings, generate_golden_qa_flag: bool, v
                     f"Existing golden QA file {settings.eval_dataset_path!r} has an entry "
                     f"missing required keys: {entry!r}"
                 )
+        problems = check_golden_entries(entries, load_corpus_pages(settings.corpus_dir))
+        if problems:
+            raise GoldenQAGenerationError(
+                f"Existing golden QA file {settings.eval_dataset_path!r} is invalid: "
+                + "; ".join(problems[:5])
+            )
         return
     if generate_golden_qa_flag:
-        await generate_golden_qa(provider, settings.corpus_dir, settings.eval_dataset_path, verifier=verifier)
+        await generate_golden_qa(
+            provider, settings.corpus_dir, settings.eval_dataset_path,
+            num_questions=num_questions, verifier=verifier,
+        )
 
 
 async def _ingest_and_backfill_config(db, ner, settings, config, sweep_id: int | None) -> None:
@@ -138,6 +152,7 @@ async def run_bootstrap(
     db, provider, ner, settings, sweep_id: int, generate_golden_qa_flag: bool,
     codegen_tasks: list[str] | None = None, codegen_budget: dict | None = None,
     codegen_provider=None, golden_qa_provider=None, golden_qa_verifier_provider=None,
+    golden_qa_size: int = MIN_GOLDEN_QA_SIZE,
 ) -> None:
     progress_log.info("sweep %s: bootstrap started (codegen=%s, golden_qa=%s)",
                       sweep_id, codegen_tasks or "off", generate_golden_qa_flag)
@@ -172,7 +187,7 @@ async def run_bootstrap(
         with stage(sweep_id, "golden_qa", enabled=generate_golden_qa_flag):
             await _ensure_golden_qa(
                 golden_qa_provider if golden_qa_provider is not None else provider,
-                settings, generate_golden_qa_flag, golden_qa_verifier_provider,
+                settings, generate_golden_qa_flag, golden_qa_verifier_provider, golden_qa_size,
             )
         await db.set_corpus_snapshot(sweep_id, list_pdf_filenames(settings.corpus_dir))
 

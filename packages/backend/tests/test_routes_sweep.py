@@ -96,6 +96,15 @@ def test_start_sweep_rejects_zero_budget_axis(monkeypatch):
     assert response.status_code == 400
 
 
+def test_start_sweep_rejects_golden_qa_size_below_minimum(monkeypatch):
+    client = _client(monkeypatch)
+    body = {**VALID_START_BODY, "generate_golden_qa": True, "golden_qa_size": 24}
+
+    response = client.post("/api/sweep/start", json=body)
+
+    assert response.status_code == 422
+
+
 def test_start_sweep_succeeds_with_bootstrapping_status(monkeypatch):
     client = _client(monkeypatch)
 
@@ -265,8 +274,9 @@ def test_resume_failed_bootstrap_reruns_bootstrap_with_stored_options(monkeypatc
 
     async def recording_bootstrap(db, provider, ner, settings, sweep_id, generate_golden_qa_flag,
                                   codegen_tasks=None, codegen_budget=None, codegen_provider=None,
-                                  golden_qa_provider=None, golden_qa_verifier_provider=None):
-        calls.append((sweep_id, generate_golden_qa_flag, codegen_tasks))
+                                  golden_qa_provider=None, golden_qa_verifier_provider=None,
+                                  golden_qa_size=25):
+        calls.append((sweep_id, generate_golden_qa_flag, codegen_tasks, golden_qa_size))
 
     db = FakeDatabase()
     client = _client(monkeypatch, db)
@@ -275,6 +285,7 @@ def test_resume_failed_bootstrap_reruns_bootstrap_with_stored_options(monkeypatc
     monkeypatch.setattr(routes_sweep, "get_golden_qa_provider", lambda settings: object())
     monkeypatch.setattr(routes_sweep, "get_golden_qa_verifier_provider", lambda settings: object())
     sweep_id = _insert_bootstrapping_sweep(db, bootstrap_options={"generate_golden_qa": True,
+                                                                  "golden_qa_size": 40,
                                                                   "codegen_tasks": ["ocr"]})
     db._sweeps[sweep_id].update(status="failed", bootstrap_complete=False, error_message="boom")
 
@@ -283,7 +294,7 @@ def test_resume_failed_bootstrap_reruns_bootstrap_with_stored_options(monkeypatc
     assert response.status_code == 200
     assert response.json()["status"] == "bootstrapping"
     assert db._sweeps[sweep_id]["status"] == "bootstrapping"
-    assert calls == [(sweep_id, True, ["ocr"])]
+    assert calls == [(sweep_id, True, ["ocr"], 40)]
 
 
 def _insert_bootstrapping_sweep(db, bootstrap_options):

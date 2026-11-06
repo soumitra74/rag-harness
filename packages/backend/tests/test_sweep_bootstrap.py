@@ -109,9 +109,10 @@ async def test_run_bootstrap_happy_path_creates_sweep_configs_and_approves(tmp_p
     corpus_dir.mkdir()
     (corpus_dir / "doc1.pdf").write_bytes(b"not a real pdf")
     dataset_path = tmp_path / "golden_qa.json"
+    monkeypatch.setattr(sweep, "load_corpus_pages", lambda corpus_dir: {"doc1.pdf": [(1, "x " * 150)]})
     dataset_path.write_text(json.dumps([
         {"id": "q1", "question": "q", "reference_answer": "a",
-         "golden_pages": [], "query_type": "extractive"}
+         "golden_pages": [{"document": "doc1.pdf", "page": 1}], "query_type": "extractive"}
     ]))
     settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(dataset_path),
                         generated_dir=str(tmp_path / "generated"))
@@ -326,3 +327,32 @@ async def test_run_bootstrap_falls_back_to_judge_provider_for_golden_qa(tmp_path
                                generate_golden_qa_flag=True)
 
     assert generator_providers == [judge_provider]
+
+
+@pytest.mark.asyncio
+async def test_run_bootstrap_fails_on_existing_golden_qa_with_out_of_range_page(tmp_path, monkeypatch):
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    (corpus_dir / "doc1.pdf").write_bytes(b"not a real pdf")
+    dataset_path = tmp_path / "golden_qa.json"
+    dataset_path.write_text(json.dumps([
+        {"id": "q1", "question": "q", "reference_answer": "a",
+         "golden_pages": [{"document": "doc1.pdf", "page": 9}], "query_type": "extractive"}
+    ]))
+    monkeypatch.setattr(sweep, "load_corpus_pages", lambda corpus_dir: {"doc1.pdf": [(1, "x " * 150)]})
+    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(dataset_path),
+                        generated_dir=str(tmp_path / "generated"))
+
+    async def fake_inspect_corpus(provider, corpus_dir_arg):
+        return CANDIDATES
+
+    _patch_collaborators(monkeypatch, fake_inspect_corpus)
+    db = FakeDatabase()
+
+    await sweep.run_bootstrap(db, FakeProvider(), object(), settings, sweep_id=1,
+                               generate_golden_qa_flag=False)
+
+    assert db.sweep_configs == []
+    _, status, error_message = db.status_updates[0]
+    assert status == "failed"
+    assert "out of range" in error_message
