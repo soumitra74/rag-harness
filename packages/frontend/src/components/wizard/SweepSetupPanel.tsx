@@ -8,6 +8,7 @@ import {
 
 const DEFAULT_INGESTION_BUDGET: SweepBudget = { cost_usd: 10, minutes: 60, iterations: 10 };
 const DEFAULT_EVAL_BUDGET: SweepBudget = { cost_usd: 10, minutes: 30, iterations: 50 };
+const MIN_GOLDEN_QA_SIZE = 25;
 const DEFAULT_CODEGEN_BUDGET: CodegenRequest = { cost_usd: 2, minutes: 15, attempts: 6, tasks: [] };
 const CODEGEN_TASK_LABELS: Record<CodegenTaskName, string> = {
   ocr: "OCR for scanned pages (Tesseract)",
@@ -65,6 +66,7 @@ export function SweepSetupPanel({ onStarted }: SweepSetupPanelProps) {
   const [ingestionBudget, setIngestionBudget] = useState(DEFAULT_INGESTION_BUDGET);
   const [evalBudget, setEvalBudget] = useState(DEFAULT_EVAL_BUDGET);
   const [generateGoldenQa, setGenerateGoldenQa] = useState(true);
+  const [goldenQaSize, setGoldenQaSize] = useState(MIN_GOLDEN_QA_SIZE);
   const [codegenEnabled, setCodegenEnabled] = useState(false);
   const [codegen, setCodegen] = useState(DEFAULT_CODEGEN_BUDGET);
   const [starting, setStarting] = useState(false);
@@ -78,6 +80,7 @@ export function SweepSetupPanel({ onStarted }: SweepSetupPanelProps) {
         ingestionBudget,
         evalBudget,
         generateGoldenQa,
+        goldenQaSize,
         codegenEnabled ? codegen : null,
       );
       onStarted(result.sweep_id);
@@ -97,6 +100,18 @@ export function SweepSetupPanel({ onStarted }: SweepSetupPanelProps) {
         />
         Generate a golden QA set if one doesn't already exist
       </label>
+
+      {generateGoldenQa && (
+        <label className="golden-qa-size">
+          Golden QA questions (minimum {MIN_GOLDEN_QA_SIZE})
+          <input
+            type="number"
+            min={MIN_GOLDEN_QA_SIZE}
+            value={goldenQaSize}
+            onChange={(e) => setGoldenQaSize(Number(e.target.value))}
+          />
+        </label>
+      )}
 
       <BudgetFields label="Ingestion budget" value={ingestionBudget} onChange={setIngestionBudget} />
       <BudgetFields label="Eval budget" value={evalBudget} onChange={setEvalBudget} />
@@ -162,7 +177,14 @@ export function SweepSetupPanel({ onStarted }: SweepSetupPanelProps) {
       )}
 
       {error && <p className="error">{error}</p>}
-      <button onClick={handleStart} disabled={starting || (codegenEnabled && codegen.tasks.length === 0)}>
+      <button
+        onClick={handleStart}
+        disabled={
+          starting ||
+          (codegenEnabled && codegen.tasks.length === 0) ||
+          (generateGoldenQa && !(goldenQaSize >= MIN_GOLDEN_QA_SIZE))
+        }
+      >
         {starting ? "Starting..." : "Start sweep"}
       </button>
     </div>

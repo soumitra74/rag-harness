@@ -644,6 +644,7 @@ export async function startSweep(
   ingestionBudget: SweepBudget,
   evalBudget: SweepBudget,
   generateGoldenQa: boolean,
+  goldenQaSize: number,
   codegen: CodegenRequest | null = null,
 ): Promise<{ sweep_id: number; status: string }> {
   const res = await fetch(`${API_BASE_URL}/api/sweep/start`, {
@@ -653,6 +654,7 @@ export async function startSweep(
       ingestion_budget: ingestionBudget,
       eval_budget: evalBudget,
       generate_golden_qa: generateGoldenQa,
+      golden_qa_size: goldenQaSize,
       codegen,
     }),
   });
