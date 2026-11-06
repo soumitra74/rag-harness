@@ -1007,6 +1007,13 @@ class Database:
             item["evaluated_combos"] = json.loads(item["evaluated_combos"])
             return item
 
+    async def list_sweep_summaries(self) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, status, created_at FROM sweeps ORDER BY id DESC"
+            )
+            return [dict(row) for row in rows]
+
     async def get_latest_sweep_summary(self) -> dict | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(

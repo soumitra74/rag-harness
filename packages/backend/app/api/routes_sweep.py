@@ -191,6 +191,15 @@ async def start_sweep(request: Request, body: StartSweepRequest):
     return {"sweep_id": sweep_id, "status": "bootstrapping"}
 
 
+@router.get("/api/sweeps")
+async def list_sweeps(request: Request):
+    sweeps = await request.app.state.db.list_sweep_summaries()
+    return [
+        {"sweep_id": s["id"], "status": s["status"], "created_at": s["created_at"].isoformat()}
+        for s in sweeps
+    ]
+
+
 @router.get("/api/sweep/latest")
 async def get_latest_sweep(request: Request):
     latest = await request.app.state.db.get_latest_sweep_summary()
