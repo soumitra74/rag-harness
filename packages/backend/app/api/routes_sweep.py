@@ -6,7 +6,9 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.services.codegen import CODEGEN_AXES, reset_graph_labels
-from app.services.judge import create_judge, get_codegen_provider, get_completion_provider
+from app.services.judge import (
+    create_judge, get_codegen_provider, get_completion_provider, get_golden_qa_provider,
+)
 from app.services.sweep_log import MeteredProvider
 from app.services.sweep import (
     INNER_GRID,
@@ -127,16 +129,28 @@ def _get_codegen_provider(request: Request):
     )
 
 
+def _get_golden_qa_provider(request: Request):
+    settings = request.app.state.settings
+    return MeteredProvider(
+        get_golden_qa_provider(settings), request.app.state.db,
+        settings.golden_qa_provider or settings.eval_judge_provider,
+        settings.golden_qa_model or settings.eval_judge_model,
+        settings.judge_cost_per_1m_in_usd, settings.judge_cost_per_1m_out_usd,
+    )
+
+
 def _bootstrap_coroutine(request: Request, sweep: dict):
     options = sweep.get("bootstrap_options") or {}
     codegen_tasks = options.get("codegen_tasks")
+    generate_golden_qa = options.get("generate_golden_qa", False)
     reset_graph_labels(request.app.state.ner)
     return run_bootstrap(
         request.app.state.db, _get_provider(request), request.app.state.ner,
-        request.app.state.settings, sweep["id"], options.get("generate_golden_qa", False),
+        request.app.state.settings, sweep["id"], generate_golden_qa,
         codegen_tasks=codegen_tasks,
         codegen_budget=sweep.get("codegen_budget"),
         codegen_provider=_get_codegen_provider(request) if codegen_tasks else None,
+        golden_qa_provider=_get_golden_qa_provider(request) if generate_golden_qa else None,
     )
 
 

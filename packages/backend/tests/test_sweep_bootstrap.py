@@ -271,3 +271,58 @@ async def test_run_bootstrap_checks_empty_corpus_before_generating_golden_qa(
     sweep_id, status, error_message = db.status_updates[0]
     assert status == "failed"
     assert "no files" in error_message
+
+
+@pytest.mark.asyncio
+async def test_run_bootstrap_generates_golden_qa_with_dedicated_provider(tmp_path, monkeypatch):
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    (corpus_dir / "doc1.pdf").write_bytes(b"not a real pdf")
+    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(tmp_path / "missing.json"),
+                        generated_dir=str(tmp_path / "generated"))
+
+    async def fake_inspect_corpus(provider, corpus_dir_arg):
+        return CANDIDATES
+
+    generator_providers = []
+
+    async def recording_generate_golden_qa(provider, corpus_dir_arg, output_path, num_questions=20):
+        generator_providers.append(provider)
+        return 0
+
+    _patch_collaborators(monkeypatch, fake_inspect_corpus)
+    monkeypatch.setattr(sweep, "generate_golden_qa", recording_generate_golden_qa)
+    golden_provider = FakeProvider()
+    judge_provider = FakeProvider()
+
+    await sweep.run_bootstrap(FakeDatabase(), judge_provider, object(), settings, sweep_id=1,
+                               generate_golden_qa_flag=True, golden_qa_provider=golden_provider)
+
+    assert generator_providers == [golden_provider]
+
+
+@pytest.mark.asyncio
+async def test_run_bootstrap_falls_back_to_judge_provider_for_golden_qa(tmp_path, monkeypatch):
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    (corpus_dir / "doc1.pdf").write_bytes(b"not a real pdf")
+    settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(tmp_path / "missing.json"),
+                        generated_dir=str(tmp_path / "generated"))
+
+    async def fake_inspect_corpus(provider, corpus_dir_arg):
+        return CANDIDATES
+
+    generator_providers = []
+
+    async def recording_generate_golden_qa(provider, corpus_dir_arg, output_path, num_questions=20):
+        generator_providers.append(provider)
+        return 0
+
+    _patch_collaborators(monkeypatch, fake_inspect_corpus)
+    monkeypatch.setattr(sweep, "generate_golden_qa", recording_generate_golden_qa)
+    judge_provider = FakeProvider()
+
+    await sweep.run_bootstrap(FakeDatabase(), judge_provider, object(), settings, sweep_id=1,
+                               generate_golden_qa_flag=True)
+
+    assert generator_providers == [judge_provider]

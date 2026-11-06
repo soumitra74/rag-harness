@@ -137,7 +137,7 @@ def _bootstrap_rows(sweep_configs: list[dict]) -> list[dict]:
 async def run_bootstrap(
     db, provider, ner, settings, sweep_id: int, generate_golden_qa_flag: bool,
     codegen_tasks: list[str] | None = None, codegen_budget: dict | None = None,
-    codegen_provider=None,
+    codegen_provider=None, golden_qa_provider=None,
 ) -> None:
     progress_log.info("sweep %s: bootstrap started (codegen=%s, golden_qa=%s)",
                       sweep_id, codegen_tasks or "off", generate_golden_qa_flag)
@@ -170,7 +170,10 @@ async def run_bootstrap(
                 await db.upsert_generated_artifact(sweep_id, task, content)
             progress_log.info("sweep %s: reused generated code: %s", sweep_id, sorted(reused) or "none")
         with stage(sweep_id, "golden_qa", enabled=generate_golden_qa_flag):
-            await _ensure_golden_qa(provider, settings, generate_golden_qa_flag)
+            await _ensure_golden_qa(
+                golden_qa_provider if golden_qa_provider is not None else provider,
+                settings, generate_golden_qa_flag,
+            )
         await db.set_corpus_snapshot(sweep_id, list_pdf_filenames(settings.corpus_dir))
 
         if not saved:

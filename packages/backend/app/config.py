@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     # eval judge provider and model.
     codegen_provider: str | None = None
     codegen_model: str | None = None
+
+    # LLM that writes the golden QA set (see golden_qa_generator.py). Its spend
+    # counts against the eval budget. Unset falls back to the eval judge.
+    golden_qa_provider: str | None = None
+    golden_qa_model: str | None = None
     eval_dataset_path: str = "eval/golden_qa.json"
 
     # Cost-rate inputs for the optimization harness's budget tracking (see

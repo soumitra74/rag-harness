@@ -264,13 +264,15 @@ def test_resume_failed_bootstrap_reruns_bootstrap_with_stored_options(monkeypatc
     calls = []
 
     async def recording_bootstrap(db, provider, ner, settings, sweep_id, generate_golden_qa_flag,
-                                  codegen_tasks=None, codegen_budget=None, codegen_provider=None):
+                                  codegen_tasks=None, codegen_budget=None, codegen_provider=None,
+                                  golden_qa_provider=None):
         calls.append((sweep_id, generate_golden_qa_flag, codegen_tasks))
 
     db = FakeDatabase()
     client = _client(monkeypatch, db)
     monkeypatch.setattr(routes_sweep, "run_bootstrap", recording_bootstrap)
     monkeypatch.setattr(routes_sweep, "get_codegen_provider", lambda settings: object())
+    monkeypatch.setattr(routes_sweep, "get_golden_qa_provider", lambda settings: object())
     sweep_id = _insert_bootstrapping_sweep(db, bootstrap_options={"generate_golden_qa": True,
                                                                   "codegen_tasks": ["ocr"]})
     db._sweeps[sweep_id].update(status="failed", bootstrap_complete=False, error_message="boom")

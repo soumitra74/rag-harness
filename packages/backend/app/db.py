@@ -1061,7 +1061,7 @@ class Database:
                 """
                 SELECT COALESCE(SUM(cost_usd), 0) FROM llm_usage
                 WHERE sweep_id = $1
-                  AND stage IN ('inspect_corpus', 'golden_qa', 'propose_next_config', 'summary')
+                  AND stage IN ('inspect_corpus', 'propose_next_config', 'summary')
                 """,
                 sweep_id,
             )
@@ -1084,8 +1084,16 @@ class Database:
                 """,
                 sweep_id,
             )
+            golden_qa_cost = await conn.fetchval(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0) FROM llm_usage
+                WHERE sweep_id = $1 AND stage = 'golden_qa'
+                """,
+                sweep_id,
+            )
             return {
-                "cost_usd": float(row["cost_usd"]), "minutes": float(row["minutes"]),
+                "cost_usd": float(row["cost_usd"]) + float(golden_qa_cost),
+                "minutes": float(row["minutes"]),
                 "iterations": row["iterations"],
             }
 

@@ -101,6 +101,17 @@ def get_codegen_provider(settings: Settings) -> CompletionProvider:
     return get_completion_provider(settings.model_copy(update=overrides))
 
 
+def get_golden_qa_provider(settings: Settings) -> CompletionProvider:
+    if settings.golden_qa_provider is None and settings.golden_qa_model is None:
+        return get_completion_provider(settings)
+    overrides = {}
+    if settings.golden_qa_provider is not None:
+        overrides["eval_judge_provider"] = settings.golden_qa_provider
+    if settings.golden_qa_model is not None:
+        overrides["eval_judge_model"] = settings.golden_qa_model
+    return get_completion_provider(settings.model_copy(update=overrides))
+
+
 @dataclass
 class JudgeResult:
     score: float
