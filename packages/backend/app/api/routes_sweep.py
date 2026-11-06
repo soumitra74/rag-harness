@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.services.codegen import CODEGEN_AXES, reset_graph_labels
 from app.services.judge import (
     create_judge, get_codegen_provider, get_completion_provider, get_golden_qa_provider,
+    get_golden_qa_verifier_provider,
 )
 from app.services.sweep_log import MeteredProvider
 from app.services.sweep import (
@@ -139,6 +140,16 @@ def _get_golden_qa_provider(request: Request):
     )
 
 
+def _get_golden_qa_verifier_provider(request: Request):
+    settings = request.app.state.settings
+    return MeteredProvider(
+        get_golden_qa_verifier_provider(settings), request.app.state.db,
+        settings.golden_qa_verifier_provider or settings.eval_judge_provider,
+        settings.golden_qa_verifier_model or settings.eval_judge_model,
+        settings.golden_qa_verifier_cost_per_1m_in_usd, settings.golden_qa_verifier_cost_per_1m_out_usd,
+    )
+
+
 def _bootstrap_coroutine(request: Request, sweep: dict):
     options = sweep.get("bootstrap_options") or {}
     codegen_tasks = options.get("codegen_tasks")
@@ -151,6 +162,7 @@ def _bootstrap_coroutine(request: Request, sweep: dict):
         codegen_budget=sweep.get("codegen_budget"),
         codegen_provider=_get_codegen_provider(request) if codegen_tasks else None,
         golden_qa_provider=_get_golden_qa_provider(request) if generate_golden_qa else None,
+        golden_qa_verifier_provider=_get_golden_qa_verifier_provider(request) if generate_golden_qa else None,
     )
 
 

@@ -7,6 +7,7 @@ from app.services.chunking import extract_pages
 from app.services.llm_json import extract_json
 
 MIN_PAGE_CHARS = 200
+MAX_PAGE_CHARS = 6000
 QUERY_TYPES = {"extractive", "abstractive"}
 AUTHOR_STOPWORDS = {"and", "the", "for"}
 
@@ -24,6 +25,15 @@ Respond with only the JSON object, no other text.
 Document: {filename}, page {page_number}
 Page text:
 {page_text}"""
+
+VERIFY_PROMPT = """Decide whether the page below supports the reference answer to the question.
+
+Question: {question}
+Reference answer: {answer}
+Page text:
+{page_text}
+
+Respond with only a JSON object: {{"supported": true or false, "quote": "a sentence copied word-for-word from the page that supports the answer, or empty if none"}}"""
 
 
 class GoldenQAGenerationError(Exception):
@@ -79,6 +89,21 @@ def _author_terms(filename: str) -> set[str]:
     return {w.lower() for w in re.findall(r"[A-Za-z]+", authors) if w.lower() not in AUTHOR_STOPWORDS and len(w) > 2}
 
 
+def _squash(text: str) -> str:
+    return " ".join(text.split()).lower()
+
+
+def _is_verified(verdict_text: str, page_text: str) -> bool:
+    try:
+        verdict = extract_json(verdict_text)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(verdict, dict) or verdict.get("supported") is not True:
+        return False
+    quote = verdict.get("quote")
+    return isinstance(quote, str) and bool(quote.strip()) and _squash(quote) in _squash(page_text)
+
+
 def _entry_from_response(text: str, filename: str, page_number: int, entry_id: str) -> dict | None:
     try:
         parsed = extract_json(text)
@@ -108,8 +133,9 @@ def _entry_from_response(text: str, filename: str, page_number: int, entry_id: s
 
 
 async def generate_golden_qa(
-    provider, corpus_dir: str, output_path: str, num_questions: int = 20,
+    provider, corpus_dir: str, output_path: str, num_questions: int = 20, verifier=None,
 ) -> int:
+    verifier = verifier if verifier is not None else provider
     filenames = _list_pdf_filenames(corpus_dir)
     documents = _load_documents(corpus_dir, filenames)
     sample = _sample_pages(documents, num_questions)
@@ -117,16 +143,26 @@ async def generate_golden_qa(
         raise GoldenQAGenerationError("No pages with enough text to generate questions from")
 
     entries = []
+    candidates = 0
     for filename, page_number, page_text in sample:
+        shown = page_text[:MAX_PAGE_CHARS]
         response = await provider.complete(PAGE_PROMPT.format(
-            filename=filename, page_number=page_number, page_text=page_text[:6000],
+            filename=filename, page_number=page_number, page_text=shown,
         ))
         entry = _entry_from_response(response.text, filename, page_number, f"q{len(entries) + 1:03d}")
-        if entry is not None:
+        if entry is None:
+            continue
+        candidates += 1
+        verdict = await verifier.complete(VERIFY_PROMPT.format(
+            question=entry["question"], answer=entry["reference_answer"], page_text=shown,
+        ))
+        if _is_verified(verdict.text, shown):
             entries.append(entry)
 
     if not entries:
-        raise GoldenQAGenerationError("Failed to generate golden QA set: no valid entries")
+        raise GoldenQAGenerationError(
+            f"Failed to generate golden QA set: 0 of {candidates} candidate questions passed verification"
+        )
 
     destination = Path(output_path)
     tmp_path = destination.with_suffix(destination.suffix + ".tmp")

@@ -57,7 +57,7 @@ def list_pdf_filenames(corpus_dir: str) -> list[str]:
     return sorted(p.name for p in path.glob("*.pdf"))
 
 
-async def _ensure_golden_qa(provider, settings, generate_golden_qa_flag: bool) -> None:
+async def _ensure_golden_qa(provider, settings, generate_golden_qa_flag: bool, verifier=None) -> None:
     path = Path(settings.eval_dataset_path)
     if path.exists():
         entries = json.loads(path.read_text(encoding="utf-8"))
@@ -69,7 +69,7 @@ async def _ensure_golden_qa(provider, settings, generate_golden_qa_flag: bool) -
                 )
         return
     if generate_golden_qa_flag:
-        await generate_golden_qa(provider, settings.corpus_dir, settings.eval_dataset_path)
+        await generate_golden_qa(provider, settings.corpus_dir, settings.eval_dataset_path, verifier=verifier)
 
 
 async def _ingest_and_backfill_config(db, ner, settings, config, sweep_id: int | None) -> None:
@@ -137,7 +137,7 @@ def _bootstrap_rows(sweep_configs: list[dict]) -> list[dict]:
 async def run_bootstrap(
     db, provider, ner, settings, sweep_id: int, generate_golden_qa_flag: bool,
     codegen_tasks: list[str] | None = None, codegen_budget: dict | None = None,
-    codegen_provider=None, golden_qa_provider=None,
+    codegen_provider=None, golden_qa_provider=None, golden_qa_verifier_provider=None,
 ) -> None:
     progress_log.info("sweep %s: bootstrap started (codegen=%s, golden_qa=%s)",
                       sweep_id, codegen_tasks or "off", generate_golden_qa_flag)
@@ -172,7 +172,7 @@ async def run_bootstrap(
         with stage(sweep_id, "golden_qa", enabled=generate_golden_qa_flag):
             await _ensure_golden_qa(
                 golden_qa_provider if golden_qa_provider is not None else provider,
-                settings, generate_golden_qa_flag,
+                settings, generate_golden_qa_flag, golden_qa_verifier_provider,
             )
         await db.set_corpus_snapshot(sweep_id, list_pdf_filenames(settings.corpus_dir))
 

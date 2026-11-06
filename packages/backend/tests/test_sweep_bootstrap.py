@@ -253,7 +253,7 @@ async def test_run_bootstrap_checks_empty_corpus_before_generating_golden_qa(
 
     generate_golden_qa_calls = []
 
-    async def tracking_generate_golden_qa(provider, corpus_dir_arg, output_path, num_questions=20):
+    async def tracking_generate_golden_qa(provider, corpus_dir_arg, output_path, num_questions=20, verifier=None):
         generate_golden_qa_calls.append(output_path)
         return 0
 
@@ -286,7 +286,7 @@ async def test_run_bootstrap_generates_golden_qa_with_dedicated_provider(tmp_pat
 
     generator_providers = []
 
-    async def recording_generate_golden_qa(provider, corpus_dir_arg, output_path, num_questions=20):
+    async def recording_generate_golden_qa(provider, corpus_dir_arg, output_path, num_questions=20, verifier=None):
         generator_providers.append(provider)
         return 0
 
@@ -314,7 +314,7 @@ async def test_run_bootstrap_falls_back_to_judge_provider_for_golden_qa(tmp_path
 
     generator_providers = []
 
-    async def recording_generate_golden_qa(provider, corpus_dir_arg, output_path, num_questions=20):
+    async def recording_generate_golden_qa(provider, corpus_dir_arg, output_path, num_questions=20, verifier=None):
         generator_providers.append(provider)
         return 0
 

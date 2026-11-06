@@ -101,15 +101,25 @@ def get_codegen_provider(settings: Settings) -> CompletionProvider:
     return get_completion_provider(settings.model_copy(update=overrides))
 
 
-def get_golden_qa_provider(settings: Settings) -> CompletionProvider:
-    if settings.golden_qa_provider is None and settings.golden_qa_model is None:
+def _completion_provider_with_overrides(settings: Settings, provider: str | None, model: str | None) -> CompletionProvider:
+    if provider is None and model is None:
         return get_completion_provider(settings)
     overrides = {}
-    if settings.golden_qa_provider is not None:
-        overrides["eval_judge_provider"] = settings.golden_qa_provider
-    if settings.golden_qa_model is not None:
-        overrides["eval_judge_model"] = settings.golden_qa_model
+    if provider is not None:
+        overrides["eval_judge_provider"] = provider
+    if model is not None:
+        overrides["eval_judge_model"] = model
     return get_completion_provider(settings.model_copy(update=overrides))
+
+
+def get_golden_qa_provider(settings: Settings) -> CompletionProvider:
+    return _completion_provider_with_overrides(settings, settings.golden_qa_provider, settings.golden_qa_model)
+
+
+def get_golden_qa_verifier_provider(settings: Settings) -> CompletionProvider:
+    return _completion_provider_with_overrides(
+        settings, settings.golden_qa_verifier_provider, settings.golden_qa_verifier_model,
+    )
 
 
 @dataclass

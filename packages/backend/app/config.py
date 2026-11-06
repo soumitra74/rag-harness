@@ -103,6 +103,12 @@ class Settings(BaseSettings):
     # counts against the eval budget. Unset falls back to the eval judge.
     golden_qa_provider: str | None = None
     golden_qa_model: str | None = None
+    # LLM that verifies each golden QA candidate against its page. Unset falls
+    # back to the eval judge; its spend counts against the eval budget.
+    golden_qa_verifier_provider: str | None = None
+    golden_qa_verifier_model: str | None = None
+    golden_qa_verifier_cost_per_1m_in_usd: float = 0.0
+    golden_qa_verifier_cost_per_1m_out_usd: float = 0.0
     eval_dataset_path: str = "eval/golden_qa.json"
 
     # Cost-rate inputs for the optimization harness's budget tracking (see
