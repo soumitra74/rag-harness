@@ -58,26 +58,24 @@ def _eligible_pages(pages: list[tuple[int, str]]) -> list[tuple[int, str]]:
     return [(number, text) for number, text in pages if len(text.strip()) >= MIN_PAGE_CHARS]
 
 
-def _sample_pages(
-    documents: list[tuple[str, list[tuple[int, str]]]], num_questions: int, seed: int = 0,
+def _page_queue(
+    documents: list[tuple[str, list[tuple[int, str]]]], seed: int = 0,
 ) -> list[tuple[str, int, str]]:
-    """Seeded, reproducible sample: papers are visited in a shuffled order and
-    each contributes a random page, so the set spans papers and page positions
-    instead of always taking each paper's first page."""
+    """Seeded, reproducible order over every eligible page: papers are visited in
+    a shuffled order and each round takes one page from every paper, so any
+    prefix of the queue spans papers and page positions."""
     rng = random.Random(seed)
     eligible = [(filename, _eligible_pages(pages)) for filename, pages in documents]
     eligible = [(filename, pages) for filename, pages in eligible if pages]
     rng.shuffle(eligible)
     order = {filename: rng.sample(pages, len(pages)) for filename, pages in eligible}
-    sample: list[tuple[str, int, str]] = []
+    queue: list[tuple[str, int, str]] = []
     for rank in range(max((len(pages) for _, pages in eligible), default=0)):
         for filename, _ in eligible:
             if rank < len(order[filename]):
                 number, text = order[filename][rank]
-                sample.append((filename, number, text))
-                if len(sample) == num_questions:
-                    return sample
-    return sample
+                queue.append((filename, number, text))
+    return queue
 
 
 def _load_documents(corpus_dir: str, filenames: list[str]) -> list[tuple[str, list[tuple[int, str]]]]:
@@ -187,14 +185,16 @@ async def generate_golden_qa(
     verifier = verifier if verifier is not None else provider
     filenames = _list_pdf_filenames(corpus_dir)
     documents = _load_documents(corpus_dir, filenames)
-    sample = _sample_pages(documents, num_questions)
-    if not sample:
+    queue = _page_queue(documents)
+    if not queue:
         raise GoldenQAGenerationError("No pages with enough text to generate questions from")
 
     entries = []
     candidates = 0
     seen_questions: set[str] = set()
-    for filename, page_number, page_text in sample:
+    for filename, page_number, page_text in queue:
+        if len(entries) == num_questions:
+            break
         shown = page_text[:MAX_PAGE_CHARS]
         response = await provider.complete(PAGE_PROMPT.format(
             filename=filename, page_number=page_number, page_text=shown,

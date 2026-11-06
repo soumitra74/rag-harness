@@ -103,6 +103,36 @@ async def test_generate_golden_qa_skips_malformed_responses(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_generate_golden_qa_fills_from_next_page_when_one_is_rejected(tmp_path, monkeypatch):
+    _corpus(tmp_path, ["doc1.pdf"])
+    _patch_pages(monkeypatch, {"doc1.pdf": [(n, LONG_TEXT) for n in range(1, 4)]})
+    output_path = tmp_path / "golden_qa.json"
+    provider = FakeProvider(["not json", _answer(question="Q1?"), _answer(question="Q2?")])
+
+    count = await generate_golden_qa(provider, str(tmp_path), str(output_path), num_questions=2)
+
+    assert count == 2
+    generation_prompts = [p for p in provider.prompts
+                          if VERIFY_MARKER not in p and CLOSED_BOOK_MARKER not in p]
+    assert len(generation_prompts) == 3
+
+
+@pytest.mark.asyncio
+async def test_generate_golden_qa_stops_generating_once_size_is_reached(tmp_path, monkeypatch):
+    _corpus(tmp_path, ["doc1.pdf"])
+    _patch_pages(monkeypatch, {"doc1.pdf": [(n, LONG_TEXT) for n in range(1, 6)]})
+    output_path = tmp_path / "golden_qa.json"
+    provider = FakeProvider([_answer(question="Q1?"), _answer(question="Q2?")])
+
+    count = await generate_golden_qa(provider, str(tmp_path), str(output_path), num_questions=1)
+
+    assert count == 1
+    generation_prompts = [p for p in provider.prompts
+                          if VERIFY_MARKER not in p and CLOSED_BOOK_MARKER not in p]
+    assert len(generation_prompts) == 1
+
+
+@pytest.mark.asyncio
 async def test_generate_golden_qa_raises_and_writes_nothing_when_no_response_is_valid(tmp_path, monkeypatch):
     _corpus(tmp_path, ["doc1.pdf"])
     _patch_pages(monkeypatch, {"doc1.pdf": [(1, LONG_TEXT)]})
