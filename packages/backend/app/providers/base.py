@@ -26,9 +26,10 @@ class EmbeddingProvider(Protocol):
 def build_prompt(question: str, context_chunks: list[str]) -> str:
     context = "\n\n".join(context_chunks)
     return (
-        "Answer the question using only the context below. Each context passage "
-        "is labeled [Source N -- document, page P]. After every factual claim "
-        "you make, cite the source it came from in the exact form [Source N]. "
-        "If the context doesn't contain the answer, say so explicitly.\n\n"
+        "Answer the question using only the context below and no outside knowledge. "
+        "Each context passage is labeled [Source N -- document, page P]. After every "
+        "factual claim you make, cite the source it came from in the exact form [Source N]. "
+        "If the context does not contain the answer, reply exactly: "
+        "The provided documents do not contain this answer.\n\n"
         f"Context:\n{context}\n\nQuestion: {question}"
     )
