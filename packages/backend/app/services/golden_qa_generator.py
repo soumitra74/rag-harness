@@ -15,8 +15,10 @@ AUTHOR_STOPWORDS = {"and", "the", "for"}
 PAGE_PROMPT = """You write one question for a retrieval evaluation set. Use ONLY the page below.
 
 Return a single JSON object with exactly these keys:
-- "question": a question that can be answered from this page alone. Do not mention the
-  paper's authors or title.
+- "question": a question that can be answered from this page alone. Name the subject
+  specifically (the model, dataset, report, or method the page is about) so the question
+  points to this document and not to any other paper. Do not mention the paper's authors.
+  Do not refer to figures or tables by number.
 - "reference_answer": the answer, taken from the page.
 - "query_type": "extractive" if the answer is stated directly, "abstractive" if it must be
   inferred or summarized.
@@ -166,6 +168,8 @@ def _entry_from_response(text: str, filename: str, page_number: int, entry_id: s
     if not (isinstance(answer, str) and answer.strip()):
         return None
     if query_type not in QUERY_TYPES:
+        return None
+    if "�" in question or "�" in answer:
         return None
     question_words = set(re.findall(r"[A-Za-z]+", question.lower()))
     if _author_terms(filename) & question_words:

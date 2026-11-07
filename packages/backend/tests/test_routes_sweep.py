@@ -415,3 +415,37 @@ def test_progress_unknown_sweep_returns_404(monkeypatch):
     response = client.get("/api/sweep/99/progress")
 
     assert response.status_code == 404
+
+
+def test_golden_qa_generate_rejects_non_positive_num_questions(monkeypatch, tmp_path):
+    client = _client(monkeypatch)
+    app.state.settings.eval_dataset_path = str(tmp_path / "golden_qa.json")
+
+    response = client.post("/api/golden-qa/generate", json={"num_questions": 0})
+
+    assert response.status_code == 422
+
+
+def test_golden_qa_generate_refuses_to_overwrite_existing_file(monkeypatch, tmp_path):
+    client = _client(monkeypatch)
+    golden = tmp_path / "golden_qa.json"
+    golden.write_text("[]", encoding="utf-8")
+    app.state.settings.eval_dataset_path = str(golden)
+
+    response = client.post("/api/golden-qa/generate", json={"num_questions": 25})
+
+    assert response.status_code == 409
+    assert golden.read_text(encoding="utf-8") == "[]"
+
+
+def test_golden_qa_generate_accepts_request_with_num_questions(monkeypatch, tmp_path):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(routes_sweep, "_run_golden_qa_generation", _noop)
+    monkeypatch.setattr(routes_sweep, "_get_golden_qa_provider", lambda request: object())
+    monkeypatch.setattr(routes_sweep, "_get_golden_qa_verifier_provider", lambda request: object())
+    app.state.settings.eval_dataset_path = str(tmp_path / "golden_qa.json")
+
+    response = client.post("/api/golden-qa/generate", json={"num_questions": 30})
+
+    assert response.status_code == 202
+    assert response.json()["num_questions"] == 30

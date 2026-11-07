@@ -1,4 +1,6 @@
 import asyncio
+import logging
+from pathlib import Path
 
 from typing import Literal
 
@@ -6,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.services.codegen import CODEGEN_AXES, reset_graph_labels
-from app.services.golden_qa_generator import MIN_GOLDEN_QA_SIZE
+from app.services.golden_qa_generator import MIN_GOLDEN_QA_SIZE, generate_golden_qa
 from app.services.judge import (
     create_judge, get_codegen_provider, get_completion_provider, get_golden_qa_provider,
     get_golden_qa_verifier_provider,
@@ -23,6 +25,7 @@ from app.services.sweep import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 BUDGET_AXES = ("cost_usd", "minutes", "iterations")
 
@@ -57,6 +60,11 @@ class StartSweepRequest(BaseModel):
     generate_golden_qa: bool = False
     golden_qa_size: int = Field(default=MIN_GOLDEN_QA_SIZE, ge=MIN_GOLDEN_QA_SIZE)
     codegen: CodegenInput | None = None
+
+
+class GoldenQAGenerateRequest(BaseModel):
+    num_questions: int = Field(default=MIN_GOLDEN_QA_SIZE, ge=1)
+    overwrite: bool = False
 
 
 class SuggestRequest(BaseModel):
@@ -167,6 +175,36 @@ def _bootstrap_coroutine(request: Request, sweep: dict):
         golden_qa_verifier_provider=_get_golden_qa_verifier_provider(request) if generate_golden_qa else None,
         golden_qa_size=options.get("golden_qa_size", MIN_GOLDEN_QA_SIZE),
     )
+
+
+async def _run_golden_qa_generation(provider, verifier, settings, num_questions: int) -> None:
+    try:
+        count = await generate_golden_qa(
+            provider, settings.corpus_dir, settings.eval_dataset_path,
+            num_questions=num_questions, verifier=verifier,
+        )
+        logger.info("Generated %d golden QA entries at %s", count, settings.eval_dataset_path)
+    except Exception:
+        logger.exception("Golden QA generation failed")
+
+
+@router.post("/api/golden-qa/generate", status_code=202)
+async def generate_golden_qa_route(request: Request, body: GoldenQAGenerateRequest):
+    settings = request.app.state.settings
+    if Path(settings.eval_dataset_path).exists() and not body.overwrite:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{settings.eval_dataset_path} already exists; pass overwrite=true to replace it",
+        )
+    asyncio.create_task(_run_golden_qa_generation(
+        _get_golden_qa_provider(request), _get_golden_qa_verifier_provider(request),
+        settings, body.num_questions,
+    ))
+    return {
+        "status": "generating",
+        "num_questions": body.num_questions,
+        "path": settings.eval_dataset_path,
+    }
 
 
 @router.post("/api/sweep/start")

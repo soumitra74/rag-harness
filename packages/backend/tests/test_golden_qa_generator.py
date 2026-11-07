@@ -118,6 +118,20 @@ async def test_generate_golden_qa_fills_from_next_page_when_one_is_rejected(tmp_
 
 
 @pytest.mark.asyncio
+async def test_generate_golden_qa_rejects_questions_with_broken_encoding(tmp_path, monkeypatch):
+    _corpus(tmp_path, ["doc1.pdf"])
+    _patch_pages(monkeypatch, {"doc1.pdf": [(n, LONG_TEXT) for n in range(1, 3)]})
+    output_path = tmp_path / "golden_qa.json"
+    provider = FakeProvider([_answer(question="What is TransXion�s score?"), _answer(question="Q2?")])
+
+    count = await generate_golden_qa(provider, str(tmp_path), str(output_path), num_questions=1)
+
+    assert count == 1
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert written[0]["question"] == "Q2?"
+
+
+@pytest.mark.asyncio
 async def test_generate_golden_qa_stops_generating_once_size_is_reached(tmp_path, monkeypatch):
     _corpus(tmp_path, ["doc1.pdf"])
     _patch_pages(monkeypatch, {"doc1.pdf": [(n, LONG_TEXT) for n in range(1, 6)]})
