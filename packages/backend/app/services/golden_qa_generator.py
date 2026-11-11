@@ -7,6 +7,7 @@ from app.services.chunking import extract_pages
 from app.services.llm_json import extract_json
 
 MIN_GOLDEN_QA_SIZE = 25
+DEV_SIZE = 20
 MIN_PAGE_CHARS = 200
 MAX_PAGE_CHARS = 6000
 QUERY_TYPES = {"extractive", "abstractive"}
@@ -106,6 +107,32 @@ def _is_not_answerable_without_document(text: str) -> bool:
     except json.JSONDecodeError:
         return False
     return isinstance(verdict, dict) and verdict.get("answerable_without_document") is False
+
+
+def split_golden_dataset(
+    entries: list[dict], dev_size: int = DEV_SIZE, seed: int = 0,
+) -> tuple[list[dict], list[dict]]:
+    """Deterministic (dev, holdout) split. Documents are visited in a shuffled
+    order and each contributes its next question per round, so the dev set
+    spans papers rather than taking several questions from one."""
+    rng = random.Random(seed)
+    by_document: dict[str, list[dict]] = {}
+    for entry in sorted(entries, key=lambda e: e["id"]):
+        by_document.setdefault(entry["golden_pages"][0]["document"], []).append(entry)
+    documents = sorted(by_document)
+    rng.shuffle(documents)
+    for document in documents:
+        rng.shuffle(by_document[document])
+    ordered = [
+        by_document[document][rank]
+        for rank in range(max((len(v) for v in by_document.values()), default=0))
+        for document in documents
+        if rank < len(by_document[document])
+    ]
+    dev_ids = {entry["id"] for entry in ordered[:dev_size]}
+    dev = [entry for entry in entries if entry["id"] in dev_ids]
+    holdout = [entry for entry in entries if entry["id"] not in dev_ids]
+    return dev, holdout
 
 
 def load_corpus_pages(corpus_dir: str) -> dict[str, list[tuple[int, str]]]:

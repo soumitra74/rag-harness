@@ -333,3 +333,30 @@ def test_check_golden_entries_reports_structural_problems(entries, expected):
     assert len(problems) == len(expected)
     for needle, problem in zip(expected, problems):
         assert needle in problem
+
+
+def _split_entries(documents: int, per_document: int) -> list[dict]:
+    return [
+        {"id": f"q{d:02d}{i:02d}", "question": f"Q {d} {i}?",
+         "golden_pages": [{"document": f"doc{d:02d}.pdf", "page": 1}]}
+        for d in range(documents) for i in range(per_document)
+    ]
+
+
+def test_split_golden_dataset_is_disjoint_sized_and_spans_documents():
+    entries = _split_entries(documents=10, per_document=5)
+
+    dev, holdout = golden_qa_generator.split_golden_dataset(entries, dev_size=20)
+
+    assert len(dev) == 20 and len(holdout) == 30
+    assert {e["id"] for e in dev}.isdisjoint({e["id"] for e in holdout})
+    assert len({e["golden_pages"][0]["document"] for e in dev}) == 10
+
+
+def test_split_golden_dataset_is_deterministic():
+    entries = _split_entries(documents=10, per_document=5)
+
+    first = golden_qa_generator.split_golden_dataset(entries)
+    second = golden_qa_generator.split_golden_dataset(list(reversed(entries)))
+
+    assert {e["id"] for e in first[0]} == {e["id"] for e in second[0]}
