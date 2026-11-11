@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import pytest
 
 from app.config import Settings
@@ -110,7 +111,6 @@ def _patch_common(monkeypatch, run_eval_combo_calls, budget_exhausted_after=None
     monkeypatch.setattr(sweep, "check_eval_budget", fake_check_budget)
     monkeypatch.setattr(sweep, "propose_next_config", fake_propose_next_config)
     monkeypatch.setattr(sweep, "generate_sweep_summary", fake_generate_sweep_summary)
-    monkeypatch.setattr(sweep, "load_quality_gate", lambda path: {})
     monkeypatch.setattr(sweep, "load_scoring_weights", lambda path: {})
 
 
@@ -201,3 +201,42 @@ async def test_apply_user_suggestion_with_explicit_config_creates_row_and_resume
     assert db.created_sweep_configs[0]["source"] == "user_suggested"
     assert ("running" in [u[1] for u in db.status_updates])
     assert resumed == [1]
+
+
+@pytest.mark.asyncio
+async def test_run_eval_combo_evaluates_only_dev_questions(tmp_path, monkeypatch):
+    import json as _json
+    entries = [
+        {"id": f"q{i:03d}", "question": f"Q{i}?", "reference_answer": "a", "query_type": "extractive",
+         "golden_pages": [{"document": f"doc{i % 7}.pdf", "page": 1}]}
+        for i in range(50)
+    ]
+    golden = tmp_path / "golden_qa.json"
+    golden.write_text(_json.dumps(entries), encoding="utf-8")
+    dataset_sizes = []
+
+    async def fake_run_eval_job(job, db, config, embedding_provider, chat_provider, judge, dataset,
+                                *args, **kwargs):
+        dataset_sizes.append(len(dataset))
+
+    class FakeDb:
+        async def create_eval_cycle(self, *args, **kwargs):
+            return 1
+
+        async def get_eval_cycle_aggregates(self, cycle_id):
+            return {}
+
+    monkeypatch.setattr(sweep, "run_eval_job", fake_run_eval_job)
+    monkeypatch.setattr(sweep, "get_embedding_provider_for_config", lambda settings, config: object())
+    monkeypatch.setattr(sweep, "judge_identity", lambda settings: ("j", "m"))
+    settings = SimpleNamespace(eval_dataset_path=str(golden), eval_judge_concurrency=1,
+                               eval_judge_combine_calls=False, eval_recall_k_values=[5],
+                               generation_cost_per_1m_in_usd=0, generation_cost_per_1m_out_usd=0,
+                               judge_cost_per_1m_in_usd=0, judge_cost_per_1m_out_usd=0,
+                               local_compute_cost_per_hour=0, chat_provider="c", eval_judge_provider="j")
+    combo = {"top_k": 5, "rerank_model": None, "graph_augmented": False}
+
+    await sweep._run_eval_combo(FakeDb(), None, None, None, None, settings,
+                                SimpleNamespace(id=1), combo, sweep_id=1)
+
+    assert dataset_sizes == [20]

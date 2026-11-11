@@ -1,5 +1,6 @@
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from app.providers.embedding_catalog import get_embedding_dim
@@ -18,15 +19,14 @@ from app.services.corpus_inspector import CorpusInspectionError, inspect_corpus
 from app.services.eval_run import load_golden_dataset, new_eval_job, run_eval_job
 from app.services.golden_qa_generator import (
     MIN_GOLDEN_QA_SIZE, GoldenQAGenerationError, check_golden_entries, generate_golden_qa,
-    load_corpus_pages,
+    load_corpus_pages, split_golden_dataset,
 )
 from app.services.graph_backfill import backfill_graph_for_config
 from app.services.ingest import ingest_pdf, record_ingestion_metrics
-from app.services.quality_gate import load_quality_gate
 from app.services.sweep_budget import check_eval_budget, check_ingestion_budget
 from app.services.sweep_log import progress_log, stage
 from app.services.sweep_next_config import TriedConfig, propose_next_config
-from app.services.sweep_scoring import load_scoring_weights, rank_configs
+from app.services.sweep_scoring import load_scoring_weights, pick_best_cycle, rank_configs
 from app.services.sweep_summary import generate_sweep_summary
 
 GOLDEN_QA_REQUIRED_KEYS = {"id", "question", "reference_answer", "golden_pages", "query_type"}
@@ -234,18 +234,18 @@ async def _ensure_ingested_for_loop(db, ner, settings, sweep_config, sweep_id: i
 async def _run_eval_combo(
     db, provider, chat_provider, judge, ner, settings, config, combo, sweep_id,
 ) -> int:
-    dataset = load_golden_dataset(settings.eval_dataset_path)
+    dev_dataset, _ = split_golden_dataset(load_golden_dataset(settings.eval_dataset_path))
     embedding_provider = get_embedding_provider_for_config(settings, config)
     rerank_candidates = DEFAULT_RERANK_CANDIDATES if combo["rerank_model"] else None
     reranker = get_reranker({}, combo["rerank_model"]) if combo["rerank_model"] else None
 
     cycle_id = await db.create_eval_cycle(
-        config.id, len(dataset), *judge_identity(settings), combo["graph_augmented"],
+        config.id, len(dev_dataset), *judge_identity(settings), combo["graph_augmented"],
         combo["rerank_model"], rerank_candidates, sweep_id=sweep_id, top_k=combo["top_k"],
     )
-    job = new_eval_job(config.id, len(dataset))
+    job = new_eval_job(config.id, len(dev_dataset))
     await run_eval_job(
-        job, db, config, embedding_provider, chat_provider, judge, dataset, combo["top_k"],
+        job, db, config, embedding_provider, chat_provider, judge, dev_dataset, combo["top_k"],
         cycle_id, settings.eval_judge_concurrency, settings.eval_judge_combine_calls,
         combo["graph_augmented"], ner, settings.eval_recall_k_values,
         reranker=reranker, rerank_candidates=rerank_candidates,
@@ -269,7 +269,6 @@ async def _run_eval_combo(
 async def _build_tried_configs(db, sweep_id: int, settings) -> list[TriedConfig]:
     sweep_configs = await db.list_sweep_configs(sweep_id)
     cycles = await db.list_eval_cycles_for_sweep(sweep_id)
-    gate_thresholds = load_quality_gate(settings.eval_quality_gate_path)
     weights = load_scoring_weights(settings.config_scoring_weights_path)
     # rank_configs returns one (config_id, score) pair per *cycle* (a config
     # can have several, one per inner-grid combo), sorted descending by
@@ -277,7 +276,7 @@ async def _build_tried_configs(db, sweep_id: int, settings) -> list[TriedConfig]
     # `dict(...)`, which keeps the *last* -- i.e. the lowest -- score for a
     # repeated key.
     best_score_by_config: dict[int, float] = {}
-    for config_id, score in rank_configs(cycles, gate_thresholds, weights):
+    for config_id, score in rank_configs(cycles, weights):
         best_score_by_config.setdefault(config_id, score)
 
     tried = []
@@ -296,9 +295,9 @@ async def _build_tried_configs(db, sweep_id: int, settings) -> list[TriedConfig]
 
 def _consecutive_non_improving_streak(tried: list[TriedConfig]) -> int:
     """How many of the most recently tried configs, in a row, failed to beat
-    the best score seen before them. Configs with no score (gate-failed,
-    or not yet evaluated) are skipped rather than counted either way, since
-    they're not a meaningful comparison point."""
+    the best score seen before them. Configs with no score (not yet
+    evaluated) are skipped rather than counted either way, since they're not
+    a meaningful comparison point."""
     best_so_far = None
     streak = 0
     for t in tried:
@@ -343,8 +342,12 @@ async def _propose_and_record_next(
 
 async def finalize_sweep_run(db, provider, settings, sweep_id: int, stop_reason: str) -> None:
     tried = await _build_tried_configs(db, sweep_id, settings)
-    passing = [t for t in tried if t.score is not None]
-    best = max(passing, key=lambda t: t.score, default=None)
+    cycles = await db.list_eval_cycles_for_sweep(sweep_id)
+    chosen = pick_best_cycle(cycles, load_scoring_weights(settings.config_scoring_weights_path))
+    best = None
+    if chosen is not None:
+        best_config_id, best_score = chosen
+        best = next(replace(t, score=best_score) for t in tried if t.config_id == best_config_id)
     with stage(sweep_id, "summary", stop_reason=stop_reason):
         summary = await generate_sweep_summary(
             provider, _corpus_summary_text(settings), tried, stop_reason, best,

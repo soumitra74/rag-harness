@@ -43,7 +43,6 @@ class FakeDatabase(CodegenFakeMethods):
 
 
 def _settings(monkeypatch):
-    monkeypatch.setattr(sweep, "load_quality_gate", lambda path: {})
     monkeypatch.setattr(sweep, "load_scoring_weights", lambda path: {"hit_rate": 1.0})
     return Settings()
 
