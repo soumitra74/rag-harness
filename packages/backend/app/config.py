@@ -36,13 +36,6 @@ class Settings(BaseSettings):
     rca_readonly_database_url: str = "postgresql://rca_readonly:rcareadonly@localhost:15432/ragdb"
     rca_readonly_password: str = "rcareadonly"
     rca_supervisor_model: str = "claude-sonnet-5"
-    # Warmer than the judge's near-zero setting: the RCA supervisor is
-    # synthesizing a first-draft investigation narrative from tool results,
-    # not cross-checking compliance -- some variation in phrasing is fine
-    # here, unlike eval_judge_temperature below where it isn't.
-    # Code-level default only (not set in .env); override with
-    # RCA_SUPERVISOR_TEMPERATURE if needed.
-    rca_supervisor_temperature: float = 0.7
     # Volume-mounted in docker-compose.yml (see main.py's file logging setup).
     rca_log_file: str = "/app/logs/backend.log"
 

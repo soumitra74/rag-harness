@@ -13,13 +13,11 @@ class RcaSupervisorProvider:
     def __init__(self, settings: Settings):
         self._client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=300)
         self._model = settings.rca_supervisor_model
-        self._temperature = settings.rca_supervisor_temperature
 
     async def send(self, messages: list[dict], tools: list[dict], system: str):
         return await self._client.messages.create(
             model=self._model,
             max_tokens=2048,
-            temperature=self._temperature,
             system=system,
             messages=messages,
             tools=tools,
