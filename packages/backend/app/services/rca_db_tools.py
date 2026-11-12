@@ -2,6 +2,12 @@ async def get_eval_run(db, cycle_id: int, query_id: int) -> dict:
     result = await db.get_eval_run_detail(cycle_id, query_id)
     if result is None:
         raise ValueError(f"No eval_cycles row for cycle_id={cycle_id}")
+    if result["run_id"] is None:
+        result["note"] = (
+            f"query_id={query_id} was not evaluated in cycle {cycle_id}: "
+            "there is no eval_runs row, so the answer and metrics are null. "
+            "Do not search further for it in this cycle."
+        )
     return result
 
 

@@ -15,7 +15,7 @@ class FakeDatabase:
 
     async def get_eval_run_detail(self, cycle_id, query_id):
         if cycle_id == 62 and query_id == 1:
-            return {"cycle_id": 62, "config_id": 13, "question": "serial number?"}
+            return {"cycle_id": 62, "config_id": 13, "question": "serial number?", "run_id": 1}
         return None
 
     async def resolve_chunks(self, chunk_ids, dim):
@@ -34,6 +34,16 @@ class FakeDatabase:
 async def test_get_eval_run_returns_detail():
     result = await get_eval_run(FakeDatabase(), 62, 1)
     assert result["question"] == "serial number?"
+
+
+@pytest.mark.asyncio
+async def test_get_eval_run_notes_when_query_not_evaluated_in_cycle():
+    class NotEvaluatedDatabase(FakeDatabase):
+        async def get_eval_run_detail(self, cycle_id, query_id):
+            return {"cycle_id": cycle_id, "question": "q", "run_id": None, "generated_answer": None}
+
+    result = await get_eval_run(NotEvaluatedDatabase(), 105, 1)
+    assert "not evaluated in cycle 105" in result["note"]
 
 
 @pytest.mark.asyncio
