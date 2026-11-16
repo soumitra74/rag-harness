@@ -6,9 +6,12 @@ from app.services.llm_json import extract_json
 SYSTEM_PROMPT = """You are driving a greedy coordinate search over RAG ingestion configs for a
 corpus, within a budget. Given the corpus summary, every config tried so far with its score (a
 weighted composite of retrieval/judge metrics -- higher is better), and the remaining ingestion
-budget, propose ONE new candidate config: a single-dimension perturbation from the best config
-tried so far (e.g. change only chunk_size, or only embedding_model), with a one-sentence
-rationale for why it might improve the score.
+budget, propose ONE new candidate config with a one-sentence rationale for why it might improve
+the score.
+
+The candidate must change the chunking_strategy or the embedding_model compared with the config it
+is based on. Do not propose changes to chunk_size or chunk_overlap alone: size and overlap were
+found to matter little compared with the chunker and embedder. Do not repeat a config already tried.
 
 If you believe no further candidate is likely to improve on the best score tried so far, respond
 with {"converged": true} instead.
