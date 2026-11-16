@@ -6,7 +6,7 @@ from app.providers.base import LLMResponse
 from app.services import golden_qa_generator
 from app.services.golden_qa_generator import GoldenQAGenerationError, generate_golden_qa
 
-LONG_TEXT = "Synthetic data supports fraud detection research. " * 10
+LONG_TEXT = "Synthetic data supports transaction fraud detection research. " * 10
 
 
 VERIFY_MARKER = '"supported"'
@@ -40,7 +40,7 @@ def _answer(question="What is X?", answer="X is Y.", query_type="extractive", **
                        "query_type": query_type, **extra})
 
 
-def _verdict(supported, quote="Synthetic data supports fraud detection research."):
+def _verdict(supported, quote="Synthetic data supports transaction fraud detection research."):
     return json.dumps({"supported": supported, "quote": quote})
 
 
@@ -236,7 +236,7 @@ async def test_verification_quote_match_ignores_case_and_whitespace(tmp_path, mo
     _patch_pages(monkeypatch, {"doc1.pdf": [(1, LONG_TEXT)]})
     output_path = tmp_path / "golden_qa.json"
     provider = FakeProvider([_answer()],
-                            verdicts=[_verdict(True, quote="SYNTHETIC   data\nsupports fraud detection research.")])
+                            verdicts=[_verdict(True, quote="SYNTHETIC   data\nsupports transaction fraud detection research.")])
 
     count = await generate_golden_qa(provider, str(tmp_path), str(output_path), num_questions=1)
 

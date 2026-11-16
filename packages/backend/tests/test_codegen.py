@@ -22,7 +22,7 @@ from app.services.codegen import (
 from app.services.ner import ENTITY_LABELS
 from tests.codegen_fakes import CodegenFakeMethods
 
-VALID_OCR = "```python\ndef ocr_page(pdf_path, page_number):\n    return 'FRAUD REPORT TEXT'\n```"
+VALID_OCR = "```python\ndef ocr_page(pdf_path, page_number):\n    return 'TRANSACTION FRAUD REPORT TEXT'\n```"
 
 
 class FakeDb(CodegenFakeMethods):
@@ -96,7 +96,7 @@ async def test_ocr_task_passes_validation_and_stores_artifact(monkeypatch):
 
     async def fake_sandbox(url, code, entrypoint, args, files=None, timeout_s=60, debug=False):
         assert entrypoint == "ocr_page" and args == ["input.pdf", 3]
-        return "Fraud report text here"
+        return "Transaction Fraud report text here"
 
     monkeypatch.setattr(codegen, "run_in_sandbox", fake_sandbox)
     db = FakeDb()
@@ -112,7 +112,7 @@ async def test_ocr_task_passes_validation_and_stores_artifact(monkeypatch):
 @pytest.mark.asyncio
 async def test_failed_validation_is_fed_back_to_the_next_attempt(monkeypatch):
     monkeypatch.setattr(codegen, "blank_page_samples", lambda corpus_dir, n: [("a.pdf", b"%PDF", 1)])
-    replies = iter(["", "Fraud report text here"])
+    replies = iter(["", "Transaction Fraud report text here"])
 
     async def fake_sandbox(url, code, entrypoint, args, files=None, timeout_s=60, debug=False):
         return next(replies)
