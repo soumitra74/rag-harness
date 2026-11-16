@@ -11,5 +11,6 @@ corpus/*
 backups/
 logs/
 golden_qa*.json
+eval/golden_qa*.json
 packages/backend/generated/ocr.py
 packages/backend/generated/graph_labels.json

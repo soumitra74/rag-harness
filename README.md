@@ -1,15 +1,16 @@
-# Transaction Fraud RAG
+# RAG Harness
 
-RAG over a transaction-fraud corpus, used to find the best retrieval/generation
-config. Separate from the FLAIR project: own Postgres (pgvector), own ports, own
-volumes.
+A harness for finding the best retrieval and generation configuration for a
+document corpus. It runs sweeps over chunking, embedding, retrieval and
+generation settings, generates a golden question set from the corpus, and scores
+each config against it.
 
 ## Setup
 
 1. `cp .env.example .env` and fill in provider keys.
-2. Put the corpus files in `corpus/` (read-only mount into the backend).
+2. Put your PDF corpus in `corpus/` (read-only mount into the backend).
 3. `docker compose up --build`
-4. Ingest with `./scripts/seed.sh` once the seed script is adapted to this corpus.
+4. Ingest with `./scripts/seed.sh` once the seed script is adapted to your corpus.
 
 ## Ports
 
