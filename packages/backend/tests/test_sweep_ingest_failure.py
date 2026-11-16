@@ -14,7 +14,7 @@ def _settings(tmp_path, file_count):
                     generated_dir=str(tmp_path / "generated"))
 
 
-async def _inspect(provider, corpus_dir):
+def _inspect(corpus_dir):
     return CANDIDATES
 
 

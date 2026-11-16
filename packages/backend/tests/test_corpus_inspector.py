@@ -1,73 +1,39 @@
-import json
-
 import pytest
 
-from app.providers.base import LLMResponse
+from app.api.routes_configs import ALL_CHUNKING_STRATEGIES
+from app.providers.embedding_catalog import get_embedding_dim
 from app.services.corpus_inspector import (
+    BOOTSTRAP_CANDIDATES,
     CorpusConfigCandidate,
     CorpusInspectionError,
     inspect_corpus,
 )
 
-CANNED_CANDIDATES = [
-    {
-        "chunking_strategy": "sliding_window", "chunk_size": 1000, "chunk_overlap": 200,
-        "embedding_provider": "local", "embedding_model": "BAAI/bge-base-en-v1.5",
-        "rationale": "generic baseline",
-    },
-    {
-        "chunking_strategy": "document_structure_aware", "chunk_size": 800, "chunk_overlap": 100,
-        "embedding_provider": "local", "embedding_model": "BAAI/bge-base-en-v1.5",
-        "rationale": "structured long docs",
-    },
-]
 
-
-class FakeProvider:
-    def __init__(self, text):
-        self._text = text
-        self.last_prompt = None
-
-    async def complete(self, prompt: str) -> LLMResponse:
-        self.last_prompt = prompt
-        return LLMResponse(text=self._text, input_tokens=10, output_tokens=10)
-
-
-@pytest.mark.asyncio
-async def test_inspect_corpus_raises_on_empty_corpus(tmp_path):
+def test_inspect_corpus_raises_on_empty_corpus(tmp_path):
     with pytest.raises(CorpusInspectionError):
-        await inspect_corpus(FakeProvider(""), str(tmp_path))
+        inspect_corpus(str(tmp_path))
 
 
-@pytest.mark.asyncio
-async def test_inspect_corpus_returns_candidates_from_provider(tmp_path):
+def test_inspect_corpus_returns_bootstrap_candidates(tmp_path):
     (tmp_path / "doc1.pdf").write_bytes(b"not a real pdf")
-    provider = FakeProvider(json.dumps(CANNED_CANDIDATES))
 
-    candidates = await inspect_corpus(provider, str(tmp_path))
+    candidates = inspect_corpus(str(tmp_path))
 
-    assert len(candidates) == 2
+    assert candidates == BOOTSTRAP_CANDIDATES
     assert all(isinstance(c, CorpusConfigCandidate) for c in candidates)
-    assert candidates[0].chunking_strategy == "sliding_window"
-    assert candidates[1].rationale == "structured long docs"
 
 
-@pytest.mark.asyncio
-async def test_inspect_corpus_drops_candidates_with_unknown_chunking_strategy(tmp_path):
-    (tmp_path / "doc1.pdf").write_bytes(b"not a real pdf")
-    bad = [dict(CANNED_CANDIDATES[0], chunking_strategy="not_a_real_strategy")]
-    provider = FakeProvider(json.dumps(bad))
+def test_bootstrap_candidates_cover_several_chunkers_and_embedders():
+    chunkers = {c.chunking_strategy for c in BOOTSTRAP_CANDIDATES}
+    embedders = {(c.embedding_provider, c.embedding_model) for c in BOOTSTRAP_CANDIDATES}
 
-    with pytest.raises(CorpusInspectionError):
-        await inspect_corpus(provider, str(tmp_path))
+    assert len(chunkers) >= 3
+    assert len(embedders) >= 3
 
 
-@pytest.mark.asyncio
-async def test_inspect_corpus_drops_candidates_with_unknown_embedding_model(tmp_path):
-    (tmp_path / "doc1.pdf").write_bytes(b"not a real pdf")
-    mixed = [dict(CANNED_CANDIDATES[0], embedding_model="made-up-model"), CANNED_CANDIDATES[1]]
-    provider = FakeProvider(json.dumps(mixed))
-
-    candidates = await inspect_corpus(provider, str(tmp_path))
-
-    assert [c.rationale for c in candidates] == [CANNED_CANDIDATES[1]["rationale"]]
+def test_bootstrap_candidates_are_valid_configs():
+    for candidate in BOOTSTRAP_CANDIDATES:
+        assert candidate.chunking_strategy in ALL_CHUNKING_STRATEGIES
+        assert get_embedding_dim(candidate.embedding_provider, candidate.embedding_model) is not None
+        assert candidate.chunk_overlap < candidate.chunk_size

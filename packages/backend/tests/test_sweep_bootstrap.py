@@ -117,7 +117,7 @@ async def test_run_bootstrap_happy_path_creates_sweep_configs_and_approves(tmp_p
     settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(dataset_path),
                         generated_dir=str(tmp_path / "generated"))
 
-    async def fake_inspect_corpus(provider, corpus_dir_arg):
+    def fake_inspect_corpus(corpus_dir_arg):
         return CANDIDATES
 
     _patch_collaborators(monkeypatch, fake_inspect_corpus)
@@ -141,7 +141,7 @@ async def test_run_bootstrap_fails_on_corpus_inspection_error_with_no_partial_ro
     settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(tmp_path / "missing.json"),
                         generated_dir=str(tmp_path / "generated"))
 
-    async def failing_inspect_corpus(provider, corpus_dir_arg):
+    def failing_inspect_corpus(corpus_dir_arg):
         raise CorpusInspectionError("no files")
 
     _patch_collaborators(monkeypatch, failing_inspect_corpus)
@@ -167,7 +167,7 @@ async def test_run_bootstrap_fails_on_malformed_existing_golden_qa_file(tmp_path
     settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(dataset_path),
                         generated_dir=str(tmp_path / "generated"))
 
-    async def fake_inspect_corpus(provider, corpus_dir_arg):
+    def fake_inspect_corpus(corpus_dir_arg):
         return CANDIDATES
 
     _patch_collaborators(monkeypatch, fake_inspect_corpus)
@@ -200,7 +200,7 @@ async def test_run_bootstrap_restart_ingests_only_unfinished_candidates(tmp_path
                         generated_dir=str(tmp_path / "generated"))
     backfilled = []
 
-    async def first_run_inspect(provider, corpus_dir_arg):
+    def first_run_inspect(corpus_dir_arg):
         return TWO_CANDIDATES
 
     async def fail_on_second_backfill(db, ner, config):
@@ -225,7 +225,7 @@ async def test_run_bootstrap_restart_ingests_only_unfinished_candidates(tmp_path
         backfilled.append(config.id)
         return {}
 
-    async def inspect_must_not_rerun(provider, corpus_dir_arg):
+    def inspect_must_not_rerun(corpus_dir_arg):
         raise AssertionError("restart must reuse saved candidates, not re-inspect")
 
     monkeypatch.setattr(sweep, "backfill_graph_for_config", backfill_ok)
@@ -258,7 +258,7 @@ async def test_run_bootstrap_checks_empty_corpus_before_generating_golden_qa(
         generate_golden_qa_calls.append(output_path)
         return 0
 
-    async def failing_inspect_corpus(provider, corpus_dir_arg):
+    def failing_inspect_corpus(corpus_dir_arg):
         raise CorpusInspectionError("no files")
 
     _patch_collaborators(monkeypatch, failing_inspect_corpus)
@@ -282,7 +282,7 @@ async def test_run_bootstrap_generates_golden_qa_with_dedicated_provider(tmp_pat
     settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(tmp_path / "missing.json"),
                         generated_dir=str(tmp_path / "generated"))
 
-    async def fake_inspect_corpus(provider, corpus_dir_arg):
+    def fake_inspect_corpus(corpus_dir_arg):
         return CANDIDATES
 
     generator_providers = []
@@ -310,7 +310,7 @@ async def test_run_bootstrap_falls_back_to_judge_provider_for_golden_qa(tmp_path
     settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(tmp_path / "missing.json"),
                         generated_dir=str(tmp_path / "generated"))
 
-    async def fake_inspect_corpus(provider, corpus_dir_arg):
+    def fake_inspect_corpus(corpus_dir_arg):
         return CANDIDATES
 
     generator_providers = []
@@ -343,7 +343,7 @@ async def test_run_bootstrap_fails_on_existing_golden_qa_with_out_of_range_page(
     settings = Settings(corpus_dir=str(corpus_dir), eval_dataset_path=str(dataset_path),
                         generated_dir=str(tmp_path / "generated"))
 
-    async def fake_inspect_corpus(provider, corpus_dir_arg):
+    def fake_inspect_corpus(corpus_dir_arg):
         return CANDIDATES
 
     _patch_collaborators(monkeypatch, fake_inspect_corpus)

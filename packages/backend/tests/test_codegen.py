@@ -242,7 +242,7 @@ async def test_codegen_failure_stops_bootstrap_before_ingestion(monkeypatch):
         async def get_or_create_experiment_config(self, **kwargs):
             self.created_configs.append(kwargs)
 
-    async def fake_inspect(provider, corpus_dir):
+    def fake_inspect(corpus_dir):
         return [SimpleNamespace(rationale="r", chunking_strategy="sliding_window", chunk_size=500,
                                 chunk_overlap=50, embedding_provider="openai",
                                 embedding_model="text-embedding-3-small")]

@@ -28,7 +28,7 @@ _PROVIDER_CATALOGS: dict[str, dict[str, int]] = {
 # more, so this is the lower of the two.
 _OLLAMA_MAX_INPUT_TOKENS: dict[str, int] = {
     "nomic-embed-text": 2048,
-    "mxbai-embed-large": 512,
+    "mxbai-embed-large": 150,
     "all-minilm": 256,
 }
 _OPENAI_MAX_INPUT_TOKENS = 8191

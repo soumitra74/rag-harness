@@ -169,7 +169,7 @@ async def run_bootstrap(
             # finding I-2). inspect_corpus itself raises on empty, so simply
             # calling it first is enough to gate both checks on the same signal.
             with stage(sweep_id, "inspect_corpus"):
-                candidates = await inspect_corpus(provider, settings.corpus_dir)
+                candidates = inspect_corpus(settings.corpus_dir)
         if codegen_tasks:
             done = await db.get_generated_artifacts(sweep_id)
             pending_tasks = [task for task in codegen_tasks if task not in done]
