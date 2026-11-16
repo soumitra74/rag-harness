@@ -1,3 +1,4 @@
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,23 @@ class IngestResult:
     document_id: str
     chunk_count: int
     page_count: int
+
+
+OCR_MIN_WORD_RATIO = 0.3
+
+
+def usable_ocr_text(text: str) -> str:
+    """OCR output that is mostly non-words (garbled scans) is dropped rather than indexed."""
+    tokens = re.findall(r"\S+", text)
+    if not tokens:
+        return ""
+    words = [
+        t for t in tokens
+        if re.fullmatch(r"[A-Za-z]{3,}[.,;:!?)(\"']*", t)
+        and re.search(r"[aeiouAEIOU]", t)
+        and not re.search(r"(.)", t)
+    ]
+    return text if len(words) / len(tokens) >= OCR_MIN_WORD_RATIO else ""
 
 
 async def ingest_pdf(
@@ -41,7 +59,7 @@ async def ingest_pdf(
 
     if ocr_page is not None:
         pages = [
-            (n, normalize_page_text(await ocr_page(pdf_bytes, n)) if not text.strip() else text)
+            (n, normalize_page_text(usable_ocr_text(await ocr_page(pdf_bytes, n))) if not text.strip() else text)
             for n, text in pages
         ]
 
