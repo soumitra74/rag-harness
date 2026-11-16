@@ -121,7 +121,9 @@ The database credentials in `.env.example` are local development defaults. Chang
 
 ## Status
 
-Early stage. Interfaces and config names may change between commits.
+Current version: **0.8**. Early stage. Interfaces and config names may change between commits.
+
+Version history is tagged in git (`0.1` to `0.8`); see the milestone list in [timeline_and_learning.md](timeline_and_learning.md).
 
 ## License
 
