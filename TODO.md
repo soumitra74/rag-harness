@@ -35,3 +35,8 @@ Alternate list:
 8. **Balance the set.** Cap the share per document and per page position so the set isn't dominated by one kind of question.
 
 Pending 6,7,8 from the above list
+
+- [ ] Minor issue with corpus text: 
+PDF page text is passed to the verifier LLM, so a crafted page could try to get a bad question marked as verified. Worth knowing if the corpus is untrusted.
+
+- [ ] Tighten OCR code generation logic so the generated code checks output quality (empty or garbled text) before it's accepted.
